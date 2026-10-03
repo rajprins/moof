@@ -407,58 +407,54 @@ initialised through `pthread_once` rather than behind a flag read from
 two threads, and `gFinished` is `_Atomic` rather than `volatile`,
 which orders nothing.
 
-**Found, not fixed: the audio boundary is unsynchronised.** Every
-remaining race is between emulator sound state and CoreAudio's render
-thread, which `MySound_Init` creates through
-`HALB_IOThread::DispatchPThread`:
+**Found and fixed: the audio boundary was unsynchronised.** The
+first run reported every remaining race between emulator sound state
+and CoreAudio's render thread (`HALB_IOThread::DispatchPThread`): the
+sample stores into `TheSoundBuffer` from `ASC_SubTick`, and the
+`volatile` `TheFillOffset`, `MinFilledSoundBuffs` and `cur_audio`
+fields. They were pre-existing (before the thread move the same races
+ran between the main thread and the render thread), and `volatile`
+orders nothing between threads. There was also a logic race: on
+overflow `MySound_BeginWrite` rewound `TheWriteOffset` by a block and
+rewrote one already published to the render thread.
 
-| Site | State |
-|---|---|
-| `ASCEMDEV.c:763`, `:774` in `ASC_SubTick` | samples written into `TheSoundBuffer` |
-| `OSGLUCCO.m:1949` in `MySound_WroteABlock` | `TheFillOffset` |
-| `OSGLUCCO.m:1985`, `:2004` in `MySound_SecondNotify0` | `MinFilledSoundBuffs` |
-| `OSGLUCCO.m:2229` in `MySound_Stop` | `cur_audio` |
+Fixed entirely in the host, in the sound section of `OSGLUCCO.m`, with
+no change to the core (which only writes inside the span it is handed)
+and no lock on the render side:
 
-These are pre-existing: the sound code has never had any
-synchronisation, and before the thread move the same races existed
-between the main thread and the render thread. The thread move
-relocated one end without creating them.
+- `TheFillOffset` and `ThePlayOffset` are `_Atomic`. The producer
+  publishes the fill offset with release after the block is written and
+  converted; the callback loads it with acquire, copies, and publishes
+  the play offset with release; `MySound_BeginWrite` loads that with
+  acquire.
+- Overflow is decided once per block: if no whole block is free, the
+  block is written into a private scratch block (the spare `kOneBuffSz`
+  at the end of the allocation, never reached by masked ring accesses)
+  and dropped on completion, counted in `SoundBlocksDropped`. Published
+  samples are never rewritten.
+- `MinFilledSoundBuffs` is updated with a CAS minimum in the callback
+  and an atomic exchange in `MySound_SecondNotify0`, so pacing is
+  unchanged in effect but no minimum is lost.
+- `wantplaying`, `HaveStartedPlaying` and `lastv` are `_Atomic`; the
+  stop handshake (clear `wantplaying`, wait for `lastv` to ramp to
+  centre) is release/acquire.
 
-Correction to an earlier reading of this table: the two `ASCEMDEV.c`
-sites are not the render thread reaching into emulated device state.
-Both are `*p++ = …` through the pointer `MySound_BeginWrite` returned,
-so they are stores into the host's sample ring, `TheSoundBuffer`. The
-render thread never touches ASC registers. Every race above is
-therefore on the ring and its `volatile` offsets, and `volatile`
-orders nothing between threads. The `SNDEMDEV.c` and ASC FIFO mode
-stores are the same race and were simply not exercised in this run.
+Re-run on 2026-10-03: zero TSan reports over about three and a half
+minutes booting System 6.0.8, with sound stopped and restarted through
+`SpeedStopped` and `RunInBackground` while the run was live. In the
+ordinary build the ring was checked with a debugger: offsets advance
+in lockstep, and with the output unit stopped by hand the producer
+dropped 710 blocks into scratch, then recovered without stalling when
+the unit restarted. Audio output itself was not listened to.
 
-There is also a logic race, not only an ordering one: on overflow
-`MySound_BeginWrite` rewinds `TheWriteOffset` by a block, rewriting
-one already published to the render thread.
-
-Both are fixable entirely in the host, at `MySound_BeginWrite` and
-`MySound_EndWrite`, with no change to the core, which only ever writes
-inside the span it is handed: publish the fill offset with release
-ordering and load it with acquire in the callback, the same in reverse
-for the play offset, divert overflow into a scratch span instead of
-rewinding, update `MinFilledSoundBuffs` with an atomic minimum and
-exchange, and make `wantplaying` and `lastv` atomic.
-
-**The coarse emulator lock does not and must not cover this.** A
-realtime audio render thread that blocks on a lock held by the
-emulator would produce dropouts and priority inversion. This boundary,
-unlike the host boundary, is genuinely narrow — a stream of samples —
-so it is the one place where a lock free ring buffer is the right
-tool. That work belongs with the `SNDCOREA.m` extraction.
-
-Until then the races are real but longstanding, and the same ones
-shipped in every previous build.
-
-**Shutdown under TSan is unreliable**: one run aborted with SIGABRT
-and another did not exit within 60 s, whereas the ordinary build exits
-0 every time. `MySound_Stop` racing the render thread is the obvious
-suspect, but that is a hypothesis, not a diagnosis.
+**Shutdown under TSan**: `kill -TERM` exits promptly (status 143).
+A scripted quit with no disk mounted timed out (-1712), but not in the
+sound code: `sample` showed the main thread waiting in
+`frameTick` → `EmuLock_Acquire` for the whole run, starved by an
+emulator thread that at -O0 under TSan cannot keep up with real time
+and so barely releases the lock. The ordinary build quits the same way
+with status 0. Lock fairness under load is an `EMUTHRED.m` question and
+is left open here.
 
 **Not yet exercised:** `EmuLock_Yield`, the "all out" speed path.
 Nothing in the run drove the emulator into that mode, so the one place

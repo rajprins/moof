@@ -2138,22 +2138,81 @@ LOCALFUNC blnr InitLocationDat(void)
 #define dbglog_SoundStuff (0 && dbglog_HAVE)
 #define dbglog_SoundBuffStats (0 && dbglog_HAVE)
 
+/*
+	The sample ring is a single producer, single consumer queue
+	between two threads that must never wait for each other. The
+	producer is the emulator thread, which calls MySound_BeginWrite
+	and MySound_EndWrite sixteen times a tick from ASC_SubTick or
+	MacSound_SubTick while holding the emulator lock. The consumer is
+	CoreAudio's realtime render thread, in my_audio_callback, which
+	must never take that lock: a render thread blocked behind the
+	emulator is a dropout, and a priority inversion on top.
+
+	So the boundary is two free running offsets and nothing else.
+	TheFillOffset is written only by the producer, ThePlayOffset only
+	by the consumer, and each is read by the other side. Samples in
+	[ThePlayOffset, TheFillOffset) belong to the consumer; everything
+	else in the ring belongs to the producer. They were `volatile`,
+	which stops the compiler caching them but orders nothing: the
+	render thread could see a new fill offset before the samples it
+	covers. Now they are _Atomic, published with release once the
+	block is fully written and converted, and loaded with acquire by
+	the other side before it touches the samples the offset covers.
+
+	The offsets are 16 bits and wrap; kAllBuffLen divides 65536, so
+	their difference is always the number of samples between them.
+*/
+
+#include <stdatomic.h>
+
 LOCALVAR tpSoundSamp TheSoundBuffer = nullpr;
-static volatile ui4b ThePlayOffset;
-static volatile ui4b TheFillOffset;
-static volatile ui4b MinFilledSoundBuffs;
+static _Atomic ui4b ThePlayOffset;
+static _Atomic ui4b TheFillOffset;
+static _Atomic ui4b MinFilledSoundBuffs;
 #if dbglog_SoundBuffStats
 LOCALVAR ui4b MaxFilledSoundBuffs;
 #endif
 LOCALVAR ui4b TheWriteOffset;
 
+/*
+	Overflow. When the render thread falls behind (it is stopped, or
+	the emulator is running faster than real time) there may be no
+	free block to write into. The old answer was to rewind
+	TheWriteOffset by a block and overwrite the newest one — but that
+	block had already been published, so the producer was rewriting
+	samples the render thread was entitled to be reading.
+
+	Instead the decision is made once per block, at its first sample:
+	if a whole block is free in the ring the block is written there,
+	and since the consumer only ever frees space that decision cannot
+	become wrong part way through. Otherwise the whole block goes to a
+	private scratch block and is thrown away when it is complete. The
+	core only writes inside the span it is handed (the volume and
+	invert passes step back within it, never before it), so a span
+	from scratch is indistinguishable to it.
+
+	The scratch block is the spare kOneBuffSz at the end of the
+	allocation (dbhBufferSize); the ring never reaches it because
+	every ring access is masked with kAllBuffMask.
+*/
+LOCALVAR blnr SoundDroppingBlock = falseblnr;
+LOCALVAR ui4b SoundDropOffset;
+LOCALVAR ui5b SoundBlocksDropped = 0;
+
 LOCALPROC MySound_Start0(void)
 {
-	/* Reset variables */
-	ThePlayOffset = 0;
-	TheFillOffset = 0;
+	/*
+		Reset variables. The render callback is not running here:
+		MySound_Start calls this before AudioOutputUnitStart, and
+		MySound_Stop has already called AudioOutputUnitStop.
+	*/
+	atomic_store_explicit(&ThePlayOffset, 0, memory_order_relaxed);
+	atomic_store_explicit(&TheFillOffset, 0, memory_order_relaxed);
 	TheWriteOffset = 0;
-	MinFilledSoundBuffs = kSoundBuffers + 1;
+	SoundDroppingBlock = falseblnr;
+	SoundDropOffset = 0;
+	atomic_store_explicit(&MinFilledSoundBuffs, kSoundBuffers + 1,
+		memory_order_relaxed);
 #if dbglog_SoundBuffStats
 	MaxFilledSoundBuffs = 0;
 #endif
@@ -2161,19 +2220,38 @@ LOCALPROC MySound_Start0(void)
 
 GLOBALOSGLUFUNC tpSoundSamp MySound_BeginWrite(ui4r n, ui4r *actL)
 {
-	ui4b ToFillLen = kAllBuffLen - (TheWriteOffset - ThePlayOffset);
-	ui4b WriteBuffContig =
-		kOneBuffLen - (TheWriteOffset & kOneBuffMask);
+	ui4b BlockOffset = TheWriteOffset & kOneBuffMask;
+	ui4b WriteBuffContig = kOneBuffLen - BlockOffset;
 
 	if (WriteBuffContig < n) {
 		n = WriteBuffContig;
 	}
-	if (ToFillLen < n) {
-		/* overwrite previous buffer */
+
+	if (0 == BlockOffset && ! SoundDroppingBlock) {
+		/*
+			Acquire pairs with the release in my_audio_callback:
+			once the play offset says a block is free, the render
+			thread has finished reading it.
+		*/
+		ui4b PlayOffset = atomic_load_explicit(&ThePlayOffset,
+			memory_order_acquire);
+		ui4b ToFillLen = kAllBuffLen - (ui4b)(TheWriteOffset - PlayOffset);
+
+		if (ToFillLen < kOneBuffLen) {
 #if dbglog_SoundStuff
-		dbglog_writeln("sound buffer over flow");
+			dbglog_writeln("sound buffer over flow");
 #endif
-		TheWriteOffset -= kOneBuffLen;
+			SoundDroppingBlock = trueblnr;
+			SoundDropOffset = 0;
+		}
+	}
+
+	if (SoundDroppingBlock) {
+		if (n > kOneBuffLen - SoundDropOffset) {
+			n = kOneBuffLen - SoundDropOffset;
+		}
+		*actL = n;
+		return TheSoundBuffer + kAllBuffLen + SoundDropOffset;
 	}
 
 	*actL = n;
@@ -2206,12 +2284,19 @@ LOCALPROC MySound_WroteABlock(void)
 
 	ConvertSoundBlockToNative(p);
 
-	TheFillOffset = TheWriteOffset;
+	/*
+		Release: the samples just written and converted must be
+		visible to the render thread before the offset that hands
+		them over.
+	*/
+	atomic_store_explicit(&TheFillOffset, TheWriteOffset,
+		memory_order_release);
 
 #if dbglog_SoundBuffStats
 	{
-		ui4b ToPlayLen = TheFillOffset
-			- ThePlayOffset;
+		ui4b ToPlayLen = TheWriteOffset
+			- atomic_load_explicit(&ThePlayOffset,
+				memory_order_relaxed);
 		ui4b ToPlayBuffs = ToPlayLen >> kLnOneBuffLen;
 
 		if (ToPlayBuffs > MaxFilledSoundBuffs) {
@@ -2224,6 +2309,21 @@ LOCALPROC MySound_WroteABlock(void)
 LOCALFUNC blnr MySound_EndWrite0(ui4r actL)
 {
 	blnr v;
+
+	if (SoundDroppingBlock) {
+		/*
+			Nothing in the ring changes, so there is nothing to
+			publish; the write offset stays put and the next block
+			gets a fresh chance at the ring.
+		*/
+		SoundDropOffset += actL;
+		if (SoundDropOffset >= kOneBuffLen) {
+			SoundDroppingBlock = falseblnr;
+			SoundDropOffset = 0;
+			++SoundBlocksDropped;
+		}
+		return falseblnr;
+	}
 
 	TheWriteOffset += actL;
 
@@ -2242,26 +2342,35 @@ LOCALFUNC blnr MySound_EndWrite0(ui4r actL)
 
 LOCALPROC MySound_SecondNotify0(void)
 {
-	if (MinFilledSoundBuffs <= kSoundBuffers) {
-		if (MinFilledSoundBuffs > DesiredMinFilledSoundBuffs) {
+	/*
+		The render thread lowers MinFilledSoundBuffs towards the
+		least the ring held during this second; this thread reads it
+		and starts a new second. An exchange does both at once, so a
+		minimum the callback records in between is never lost.
+		Relaxed is enough: it is a statistic, not a guard on memory.
+	*/
+	ui4b MinFilled = atomic_exchange_explicit(&MinFilledSoundBuffs,
+		kSoundBuffers + 1, memory_order_relaxed);
+
+	if (MinFilled <= kSoundBuffers) {
+		if (MinFilled > DesiredMinFilledSoundBuffs) {
 #if dbglog_SoundStuff
 			dbglog_writeln("MinFilledSoundBuffs too high");
 #endif
 			NextTickChangeTime += MyTickDuration;
-		} else if (MinFilledSoundBuffs < DesiredMinFilledSoundBuffs) {
+		} else if (MinFilled < DesiredMinFilledSoundBuffs) {
 #if dbglog_SoundStuff
 			dbglog_writeln("MinFilledSoundBuffs too low");
 #endif
 			++TrueEmulatedTime;
 		}
 #if dbglog_SoundBuffStats
-		dbglog_writelnNum("MinFilledSoundBuffs",
-			MinFilledSoundBuffs);
+		dbglog_writelnNum("MinFilledSoundBuffs", MinFilled);
 		dbglog_writelnNum("MaxFilledSoundBuffs",
 			MaxFilledSoundBuffs);
+		dbglog_writelnNum("SoundBlocksDropped", SoundBlocksDropped);
 		MaxFilledSoundBuffs = 0;
 #endif
-		MinFilledSoundBuffs = kSoundBuffers + 1;
 	}
 }
 
@@ -2321,17 +2430,28 @@ LOCALPROC SoundRampTo(trSoundTemp *last_val, trSoundTemp dst_val,
 	*last_val = v1;
 }
 
+/*
+	Of the fields shared with the render thread, wantplaying is the
+	emulator's request to start or stop and lastv is the callback's
+	report of where the output level has got to; MySound_Stop clears
+	the first and then waits on the second to reach the centre, so
+	the stop ramps rather than clicks. Release on each store and
+	acquire on each cross thread load make that handshake an ordered
+	one. HaveStartedPlaying is reset by MySound_Start while the unit
+	is stopped and otherwise belongs to the callback, but it is atomic
+	too so that no field here is shared without being.
+*/
 struct MySoundR {
 	tpSoundSamp fTheSoundBuffer;
-	volatile ui4b (*fPlayOffset);
-	volatile ui4b (*fFillOffset);
-	volatile ui4b (*fMinFilledSoundBuffs);
+	_Atomic ui4b (*fPlayOffset);
+	_Atomic ui4b (*fFillOffset);
+	_Atomic ui4b (*fMinFilledSoundBuffs);
 
-	volatile trSoundTemp lastv;
+	_Atomic trSoundTemp lastv;
 
 	blnr enabled;
-	blnr wantplaying;
-	blnr HaveStartedPlaying;
+	_Atomic blnr wantplaying;
+	_Atomic blnr HaveStartedPlaying;
 
 	AudioUnit outputAudioUnit;
 };
@@ -2344,9 +2464,12 @@ LOCALPROC my_audio_callback(void *udata, void *stream, int len)
 	int i;
 	MySoundR *datp = (MySoundR *)udata;
 	tpSoundSamp CurSoundBuffer = datp->fTheSoundBuffer;
-	ui4b CurPlayOffset = *datp->fPlayOffset;
-	trSoundTemp v0 = datp->lastv;
-	trSoundTemp v1 = v0;
+	/* This thread is the only writer of the play offset and lastv. */
+	ui4b CurPlayOffset = atomic_load_explicit(datp->fPlayOffset,
+		memory_order_relaxed);
+	trSoundTemp v1 = atomic_load_explicit(&datp->lastv,
+		memory_order_relaxed);
+	ui4b MinFilled;
 	tpSoundSamp dst = (tpSoundSamp)stream;
 
 #if kLn2SoundSampSz > 3
@@ -2359,10 +2482,18 @@ LOCALPROC my_audio_callback(void *udata, void *stream, int len)
 #endif
 
 label_retry:
-	ToPlayLen = *datp->fFillOffset - CurPlayOffset;
+	/*
+		Acquire pairs with the release in MySound_WroteABlock: every
+		sample below the fill offset is fully written before it is
+		read here.
+	*/
+	ToPlayLen = atomic_load_explicit(datp->fFillOffset,
+		memory_order_acquire) - CurPlayOffset;
 	FilledSoundBuffs = ToPlayLen >> kLnOneBuffLen;
 
-	if (! datp->wantplaying) {
+	if (! atomic_load_explicit(&datp->wantplaying,
+		memory_order_acquire))
+	{
 #if dbglog_SoundStuff
 		dbglog_writeln("playing end transistion");
 #endif
@@ -2370,7 +2501,9 @@ label_retry:
 		SoundRampTo(&v1, kCenterTempSound, &dst, &len);
 
 		ToPlayLen = 0;
-	} else if (! datp->HaveStartedPlaying) {
+	} else if (! atomic_load_explicit(&datp->HaveStartedPlaying,
+		memory_order_relaxed))
+	{
 #if dbglog_SoundStuff
 		dbglog_writeln("playing start block");
 #endif
@@ -2393,7 +2526,8 @@ label_retry:
 				dbglog_writeln("finished start transition");
 #endif
 
-				datp->HaveStartedPlaying = trueblnr;
+				atomic_store_explicit(&datp->HaveStartedPlaying,
+					trueblnr, memory_order_relaxed);
 			}
 		}
 	}
@@ -2401,8 +2535,19 @@ label_retry:
 	if (0 == len) {
 		/* done */
 
-		if (FilledSoundBuffs < *datp->fMinFilledSoundBuffs) {
-			*datp->fMinFilledSoundBuffs = FilledSoundBuffs;
+		/*
+			Atomic minimum: MySound_SecondNotify0 may exchange in a
+			fresh value between the load and the store, and a plain
+			store would overwrite it with a stale minimum.
+		*/
+		MinFilled = atomic_load_explicit(datp->fMinFilledSoundBuffs,
+			memory_order_relaxed);
+		while ((FilledSoundBuffs < MinFilled)
+			&& ! atomic_compare_exchange_weak_explicit(
+				datp->fMinFilledSoundBuffs, &MinFilled,
+				FilledSoundBuffs,
+				memory_order_relaxed, memory_order_relaxed))
+		{
 		}
 	} else if (0 == ToPlayLen) {
 
@@ -2413,7 +2558,9 @@ label_retry:
 		for (i = 0; i < len; ++i) {
 			*dst++ = ConvertTempSoundSampleToNative(v1);
 		}
-		*datp->fMinFilledSoundBuffs = 0;
+		/* zero is the least possible, so a plain store is a minimum */
+		atomic_store_explicit(datp->fMinFilledSoundBuffs, 0,
+			memory_order_relaxed);
 	} else {
 		ui4b PlayBuffContig = kAllBuffLen
 			- (CurPlayOffset & kAllBuffMask);
@@ -2435,12 +2582,18 @@ label_retry:
 		CurPlayOffset += ToPlayLen;
 		len -= ToPlayLen;
 
-		*datp->fPlayOffset = CurPlayOffset;
+		/*
+			Release: the copy out of the ring is complete before the
+			producer, loading this with acquire, may reuse the space.
+		*/
+		atomic_store_explicit(datp->fPlayOffset, CurPlayOffset,
+			memory_order_release);
 
 		goto label_retry;
 	}
 
-	datp->lastv = v1;
+	/* Release pairs with the acquire in MySound_Stop. */
+	atomic_store_explicit(&datp->lastv, v1, memory_order_release);
 }
 
 LOCALFUNC OSStatus audioCallback(
@@ -2482,14 +2635,19 @@ LOCALPROC MySound_Stop(void)
 	dbglog_writeln("enter MySound_Stop");
 #endif
 
-	if (cur_audio.wantplaying) {
+	if (atomic_load_explicit(&cur_audio.wantplaying,
+		memory_order_relaxed))
+	{
 		OSStatus result;
 		ui4r retry_limit = 50; /* half of a second */
 
-		cur_audio.wantplaying = falseblnr;
+		atomic_store_explicit(&cur_audio.wantplaying, falseblnr,
+			memory_order_release);
 
 label_retry:
-		if (kCenterTempSound == cur_audio.lastv) {
+		if (kCenterTempSound == atomic_load_explicit(&cur_audio.lastv,
+			memory_order_acquire))
+		{
 #if dbglog_SoundStuff
 			dbglog_writeln("reached kCenterTempSound");
 #endif
@@ -2538,7 +2696,9 @@ label_retry:
 
 LOCALPROC MySound_Start(void)
 {
-	if ((! cur_audio.wantplaying) && cur_audio.enabled) {
+	if ((! atomic_load_explicit(&cur_audio.wantplaying,
+		memory_order_relaxed)) && cur_audio.enabled)
+	{
 		OSStatus result;
 
 #if dbglog_SoundStuff
@@ -2546,9 +2706,13 @@ LOCALPROC MySound_Start(void)
 #endif
 
 		MySound_Start0();
-		cur_audio.lastv = kCenterTempSound;
-		cur_audio.HaveStartedPlaying = falseblnr;
-		cur_audio.wantplaying = trueblnr;
+		atomic_store_explicit(&cur_audio.lastv, kCenterTempSound,
+			memory_order_relaxed);
+		atomic_store_explicit(&cur_audio.HaveStartedPlaying, falseblnr,
+			memory_order_relaxed);
+		/* Release publishes the resets above to the render thread. */
+		atomic_store_explicit(&cur_audio.wantplaying, trueblnr,
+			memory_order_release);
 
 		if (noErr != (result = AudioOutputUnitStart(
 			cur_audio.outputAudioUnit)))
@@ -2556,7 +2720,8 @@ LOCALPROC MySound_Start(void)
 #if dbglog_HAVE
 			dbglog_writeln("AudioOutputUnitStart fails");
 #endif
-			cur_audio.wantplaying = falseblnr;
+			atomic_store_explicit(&cur_audio.wantplaying, falseblnr,
+				memory_order_relaxed);
 		}
 
 #if dbglog_SoundStuff
@@ -2641,7 +2806,8 @@ LOCALFUNC blnr MySound_Init(void)
 	cur_audio.fPlayOffset = &ThePlayOffset;
 	cur_audio.fFillOffset = &TheFillOffset;
 	cur_audio.fMinFilledSoundBuffs = &MinFilledSoundBuffs;
-	cur_audio.wantplaying = falseblnr;
+	atomic_store_explicit(&cur_audio.wantplaying, falseblnr,
+		memory_order_relaxed);
 
 	desc.componentType = kAudioUnitType_Output;
 	desc.componentSubType = kAudioUnitSubType_DefaultOutput;
