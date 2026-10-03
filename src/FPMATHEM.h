@@ -318,7 +318,8 @@ LOCALINLINEPROC shift128Right(
 		z0 = a0>>count;
 	}
 	else {
-		z1 = ( count < 64 ) ? ( a0>>( count & 63 ) ) : 0;
+		/* was `count < 64', which can't be true here */
+		z1 = ( count < 128 ) ? ( a0>>( count & 63 ) ) : 0;
 		z0 = 0;
 	}
 	*z1Ptr = z1;
@@ -1218,6 +1219,7 @@ Package, Release 2b.
 | positive or negative integer is returned.
 *----------------------------------------------------------------------------*/
 
+#if cIncludeFPUUnused
 LOCALFUNC si5r roundAndPackInt32( flag zSign, ui6b absZ )
 {
 	si3r roundingMode;
@@ -1255,6 +1257,7 @@ LOCALFUNC si5r roundAndPackInt32( flag zSign, ui6b absZ )
 	return z;
 
 }
+#endif
 
 /*----------------------------------------------------------------------------
 | Returns the fraction bits of the extended double-precision floating-point
@@ -1833,6 +1836,7 @@ LOCALFUNC floatx80 int32_to_floatx80( si5r a )
 | overflows, the largest integer with the same sign as `a' is returned.
 *----------------------------------------------------------------------------*/
 
+#if cIncludeFPUUnused
 LOCALFUNC si5r floatx80_to_int32( floatx80 a )
 {
 	flag aSign;
@@ -1849,6 +1853,7 @@ LOCALFUNC si5r floatx80_to_int32( floatx80 a )
 	return roundAndPackInt32( aSign, aSig );
 
 }
+#endif
 
 /*----------------------------------------------------------------------------
 | Returns the result of converting the extended double-precision floating-
@@ -5681,10 +5686,12 @@ LOCALPROC myfp_FromLong(myfpr *r, ui5r x)
 	*r = int32_to_floatx80( x );
 }
 
+#if 0 /* replaced by myfp_ToInt, which saturates */
 LOCALFUNC ui5r myfp_ToLong(myfpr *x)
 {
 	return floatx80_to_int32( *x );
 }
+#endif
 
 LOCALFUNC blnr myfp_IsNan(myfpr *x)
 {
@@ -6147,7 +6154,469 @@ LOCALFUNC blnr myfp_getCR(myfpr *r, ui4b opmode)
 	return trueblnr;
 }
 
+/*
+	Compare, for FCMP. Returns the condition code byte
+	(N Z I NAN in bits 3..0) as M68000PRM, FCMP, specifies:
+	NAN if unordered; Z if equal (+0 == -0, inf == inf of same
+	sign); N if destination < source, and also on an equal
+	compare when the destination is -0 or -inf. I is never set.
+	Unlike computing a - b, this gets inf vs inf right.
+*/
+
+LOCALPROC myfp_Normalize(myfpr *x, si5r *e, ui6b *m)
+{
+	/* unbiased exponent and normalized significand of finite x */
+	si5r exp = x->high & 0x7FFF;
+	ui6b sig = x->low;
+
+	if (0 == sig) {
+		exp = 0;
+	} else {
+		si3r n = countLeadingZeros64(sig);
+
+		if (0 == exp) {
+			exp = 1; /* denormals use the minimum exponent */
+		}
+		sig <<= n;
+		exp -= n;
+	}
+	*e = exp - 0x3FFF;
+	*m = sig;
+}
+
+LOCALFUNC ui3r myfp_Compare(myfpr *a, myfpr *b)
+{
+	blnr aNeg = myfp_IsNeg(a);
+	blnr bNeg = myfp_IsNeg(b);
+	/* a zero significand with nonzero exponent is also zero */
+	blnr aZero = (! myfp_IsInf(a)) && (0 == a->low);
+	blnr bZero = (! myfp_IsInf(b)) && (0 == b->low);
+	si3r cmp; /* -1, 0, 1 for a < b, a == b, a > b */
+
+	if (myfp_IsNan(a) || myfp_IsNan(b)) {
+		return 0x01;
+	}
+
+	if (aZero && bZero) {
+		cmp = 0;
+	} else if (myfp_IsInf(a) || myfp_IsInf(b)) {
+		if (myfp_IsInf(a) && myfp_IsInf(b) && (aNeg == bNeg)) {
+			cmp = 0;
+		} else if (myfp_IsInf(a)) {
+			cmp = aNeg ? -1 : 1;
+		} else {
+			cmp = bNeg ? 1 : -1;
+		}
+	} else if (aZero) {
+		cmp = bNeg ? 1 : -1;
+	} else if (bZero) {
+		cmp = aNeg ? -1 : 1;
+	} else if (aNeg != bNeg) {
+		cmp = aNeg ? -1 : 1;
+	} else {
+		si5r ae;
+		si5r be;
+		ui6b am;
+		ui6b bm;
+
+		myfp_Normalize(a, &ae, &am);
+		myfp_Normalize(b, &be, &bm);
+		if (ae != be) {
+			cmp = (ae < be) ? -1 : 1;
+		} else if (am != bm) {
+			cmp = (am < bm) ? -1 : 1;
+		} else {
+			cmp = 0;
+		}
+		if (aNeg) {
+			cmp = - cmp;
+		}
+	}
+
+	if (cmp < 0) {
+		return 0x08;
+	} else if (cmp > 0) {
+		return 0x00;
+	} else if (aNeg && (aZero || myfp_IsInf(a))) {
+		return 0x0C;
+	} else {
+		return 0x04;
+	}
+}
+
+/*
+	Conversion to a byte, word or long integer (FMOVE to .B .W .L),
+	rounded per FPCR. M68000PRM 1.6.3 and FMOVE: if the value
+	doesn't fit (including infinity and NaN) OPERR is set and the
+	largest integer of the same sign is stored; softfloat
+	represents OPERR here by float_flag_invalid. NaNs are treated
+	as positive, as softfloat's floatx80_to_int32 does.
+*/
+
+LOCALFUNC ui5r myfp_ToInt(myfpr *x, int bits)
+{
+	floatx80 r;
+	si5r exp;
+	blnr neg = myfp_IsNeg(x) && ! myfp_IsNan(x);
+	ui6b lim = ((ui6b)1) << (bits - 1); /* magnitude of most negative */
+	ui6b mag;
+
+	if (myfp_IsNan(x) || myfp_IsInf(x)) {
+		goto l_overflow;
+	}
+	r = floatx80_round_to_int(*x);
+	exp = r.high & 0x7FFF;
+	if (exp < 0x3FFF) {
+		mag = 0; /* zero (rounded) */
+	} else if (exp - 0x3FFF >= bits) {
+		goto l_overflow;
+	} else {
+		mag = r.low >> (0x403E - exp);
+	}
+	if (mag > (neg ? lim : (lim - 1))) {
+		goto l_overflow;
+	}
+	return (ui5r)(neg ? (0 - mag) : mag);
+
+l_overflow:
+	float_exception_flags &= ~ float_flag_inexact;
+	float_raise(float_flag_invalid);
+	return (ui5r)(neg ? (0 - lim) : (lim - 1));
+}
+
+/*
+	Packed decimal real (.P) conversion, MC68881UM 2.?/M68000PRM
+	1.6.6. 96 bits: long 0 is SM SE Y Y, a three digit BCD
+	exponent (bits 27..16), a fourth exponent digit EXP3
+	(bits 15..12, only written on output), and the integer digit
+	(bits 3..0); longs 1 and 2 hold 16 fraction digits. Infinity
+	and NaN are $7FFF in the upper word of long 0 with the
+	extended-precision significand in longs 1 and 2.
+
+	Scaling by powers of ten is done in float128 (113 bits) to
+	keep the error well below the 64 bit result precision.
+*/
+
+LOCALFUNC float128 myfp_TenPow128(ui5r n)
+{
+	float128 r = float128_one;
+	float128 p = floatx80_to_float128(floatx80_Ten);
+
+	while (0 != n) {
+		if (0 != (n & 1)) {
+			r = float128_mul(r, p);
+		}
+		n >>= 1;
+		if (0 != n) {
+			p = float128_mul(p, p);
+		}
+	}
+	return r;
+}
+
+/* multiply a by 10^n, n of either sign, staying within float128 range */
+LOCALFUNC float128 myfp_ScaleTen128(float128 a, si5r n)
+{
+	while (0 != n) {
+		si5r step = n;
+
+		if (step > 4000) {
+			step = 4000;
+		} else if (step < -4000) {
+			step = -4000;
+		}
+		if (step > 0) {
+			a = float128_mul(a, myfp_TenPow128(step));
+		} else {
+			a = float128_div(a, myfp_TenPow128(- step));
+		}
+		n -= step;
+	}
+	return a;
+}
+
+LOCALFUNC floatx80 myfp_FromUi6b(ui6b m)
+{
+	if (0 == m) {
+		return packFloatx80(0, 0, 0);
+	} else {
+		si3r n = countLeadingZeros64(m);
+
+		return packFloatx80(0, 0x403E - n, m << n);
+	}
+}
+
+/*
+	Returns trueblnr if the conversion was inexact (INEX1).
+*/
+LOCALFUNC blnr myfp_FromPackedFormat(myfpr *r, ui5r v2, ui5r v1, ui5r v0)
+{
+	blnr sm = (0 != (v2 & 0x80000000));
+	blnr inexact = falseblnr;
+
+	if (0x7FFF0000 == (v2 & 0x7FFF0000)) {
+		/* infinity or NaN */
+		r->high = (sm ? 0x8000 : 0) | 0x7FFF;
+		r->low = (((ui6b)v1) << 32) | (v0 & 0xFFFFFFFF);
+		if (0 == ((ui6b)(r->low << 1))) {
+			r->low = LIT64(0x8000000000000000);
+		}
+	} else {
+		ui6b m = v2 & 0x0F;
+		si5r e = ((v2 >> 24) & 0x0F) * 100
+			+ ((v2 >> 20) & 0x0F) * 10
+			+ ((v2 >> 16) & 0x0F);
+		int i;
+
+		/*
+			Digits above 9 aren't valid BCD and give undefined
+			results on the 68881; here they just keep their
+			binary weight.
+		*/
+		for (i = 28; i >= 0; i -= 4) {
+			m = m * 10 + ((v1 >> i) & 0x0F);
+		}
+		for (i = 28; i >= 0; i -= 4) {
+			m = m * 10 + ((v0 >> i) & 0x0F);
+		}
+		if (0 != (v2 & 0x40000000)) {
+			e = - e;
+		}
+
+		if (0 == m) {
+			*r = packFloatx80(sm, 0, 0);
+		} else {
+			si3r SaveRoundingMode = float_rounding_mode;
+			si3r SaveFlags = float_exception_flags;
+			float128 t = floatx80_to_float128(myfp_FromUi6b(m));
+
+			float_exception_flags = 0;
+			float_rounding_mode = float_round_nearest_even;
+			/* mantissa is d.ddd...d with 16 fraction digits */
+			t = myfp_ScaleTen128(t, e - 16);
+			float_rounding_mode = SaveRoundingMode;
+			*r = float128_to_floatx80(t);
+			if (sm) {
+				r->high |= 0x8000;
+			}
+			inexact = (0 != (float_exception_flags
+				& float_flag_inexact));
+			float_exception_flags = SaveFlags;
+		}
+	}
+
+	return inexact;
+}
+
+/*
+	float128 a, 0 <= a < 2^63, to an integer, rounded per FPCR
+	(sign is the sign of the value a is the magnitude of).
+*/
+LOCALFUNC ui6b myfp_F128ToUi6b(float128 a, flag sign, blnr *inexact)
+{
+	si5r exp = extractFloat128Exp(a);
+	ui6b a0 = extractFloat128Frac0(a);
+	ui6b a1 = extractFloat128Frac1(a);
+	si5r shift;
+	ui6b z;
+	ui6b rb; /* fraction bits, msb is the half bit, sticky lsb */
+
+	if (0 == exp) {
+		z = 0;
+		rb = ((a0 | a1) != 0) ? 1 : 0;
+	} else {
+		a0 |= LIT64(0x0001000000000000);
+		shift = 0x3FFF + 112 - exp;
+		if (shift >= 128) {
+			z = 0;
+			rb = (128 == shift) ? (a0 << 15) | (a1 != 0)
+				: 1;
+		} else if (shift > 64) {
+			si5r s = shift - 64;
+
+			z = a0 >> s;
+			rb = (a0 << (64 - s)) | (a1 >> s) | ((a1 << (64 - s)) != 0);
+		} else if (64 == shift) {
+			z = a0;
+			rb = a1;
+		} else {
+			z = (a0 << (64 - shift)) | (a1 >> shift);
+			rb = a1 << (64 - shift);
+		}
+	}
+
+	*inexact = (0 != rb);
+	switch (float_rounding_mode) {
+		case float_round_nearest_even:
+			if ((rb > LIT64(0x8000000000000000))
+				|| ((LIT64(0x8000000000000000) == rb) && (0 != (z & 1))))
+			{
+				++z;
+			}
+			break;
+		case float_round_down:
+			if (sign && (0 != rb)) {
+				++z;
+			}
+			break;
+		case float_round_up:
+			if ((! sign) && (0 != rb)) {
+				++z;
+			}
+			break;
+		default:
+			break;
+	}
+
+	return z;
+}
+
+LOCALFUNC ui6b myfp_TenPowUi6b(si5r n)
+{
+	ui6b r = 1;
+
+	while (n-- > 0) {
+		r *= 10;
+	}
+	return r;
+}
+
+/*
+	FMOVE.P out, M68000PRM FMOVE and 1.6.6: k > 0 is the number
+	of significant digits (more than 17 is OPERR, 17 are used);
+	k <= 0 is the number of digits right of the decimal point.
+	An exponent above 999 needs EXP3 and is also an OPERR.
+	Returns the exceptions, as softfloat flags: invalid for
+	OPERR, inexact for INEX2.
+*/
+LOCALFUNC si3r myfp_ToPackedFormat(myfpr *x, si3r k,
+	ui5r *v2, ui5r *v1, ui5r *v0)
+{
+	si3r flags = 0;
+	blnr neg = myfp_IsNeg(x);
+
+	*v2 = neg ? 0x80000000 : 0;
+	*v1 = 0;
+	*v0 = 0;
+
+	if (myfp_IsNan(x) || myfp_IsInf(x)) {
+		*v2 |= 0x7FFF0000;
+		if (myfp_IsNan(x)) {
+			*v1 = (ui5r)(x->low >> 32);
+			*v0 = (ui5r)(x->low & 0xFFFFFFFF);
+		}
+	} else if (myfp_IsZero(x) || (0 == x->low)) {
+		/* signed zero, exponent zero */
+	} else {
+		si5r e2;
+		ui6b m2;
+		si5r ilog;
+		si5r len;
+		ui6b y;
+		blnr inexact = falseblnr;
+		int tries;
+		si3r SaveRoundingMode = float_rounding_mode;
+		si3r SaveFlags = float_exception_flags;
+		float128 t;
+
+		myfp_Normalize(x, &e2, &m2);
+
+		/* floor(e2 * log10(2)), 78913 / 2^18 ~= log10(2) */
+		if (e2 >= 0) {
+			ilog = (e2 * 78913) >> 18;
+		} else {
+			ilog = - (((- e2) * 78913 + 262143) >> 18);
+		}
+
+		if (k > 17) {
+			flags |= float_flag_invalid;
+		}
+
+		for (tries = 0; tries < 4; ++tries) {
+			blnr ScaleInexact;
+
+			if (k > 0) {
+				len = (k > 17) ? 17 : k;
+			} else {
+				len = ilog + 1 - k;
+				if (len > 17) {
+					len = 17;
+				} else if (len < 1) {
+					len = 1;
+				}
+			}
+
+			float_exception_flags = 0;
+			float_rounding_mode = float_round_nearest_even;
+			t = floatx80_to_float128(packFloatx80(0, e2 + 0x3FFF, m2));
+			t = myfp_ScaleTen128(t, len - 1 - ilog);
+			ScaleInexact = (0 != (float_exception_flags
+				& float_flag_inexact));
+			float_rounding_mode = SaveRoundingMode;
+			y = myfp_F128ToUi6b(t, neg, &inexact);
+			inexact = inexact || ScaleInexact;
+
+			if (y >= myfp_TenPowUi6b(len)) {
+				/* estimate too low, or rounded up to 10^len */
+				++ilog;
+			} else if ((y < myfp_TenPowUi6b(len - 1))
+				&& (tries < 3))
+			{
+				/* estimate too high */
+				--ilog;
+			} else {
+				break;
+			}
+		}
+		float_exception_flags = SaveFlags;
+		if (inexact) {
+			flags |= float_flag_inexact;
+		}
+
+		{
+			int i;
+			int shift = 28;
+			ui6b p = myfp_TenPowUi6b(len - 1);
+			ui5r *dst = v1;
+			si5r ae = (ilog < 0) ? - ilog : ilog;
+
+			*v2 |= (ui5r)(y / p);
+			y %= p;
+			for (i = 1; i < len; ++i) {
+				p /= 10;
+				*dst |= ((ui5r)(y / p)) << shift;
+				y %= p;
+				if (0 == shift) {
+					shift = 28;
+					dst = v0;
+				} else {
+					shift -= 4;
+				}
+			}
+
+			if (ilog < 0) {
+				*v2 |= 0x40000000;
+			}
+			if (ae > 999) {
+				flags |= float_flag_invalid;
+				*v2 |= ((ae / 1000) % 10) << 12;
+			}
+			*v2 |= ((ae / 100) % 10) << 24;
+			*v2 |= ((ae / 10) % 10) << 20;
+			*v2 |= (ae % 10) << 16;
+		}
+	}
+
+	return flags;
+}
+
 /* Floating point control register */
+
+LOCALVAR struct myfp_envStruct
+{
+	ui5r FPCR;  /* Floating point control register */
+	ui5r FPSR;  /* Floating point status register */
+} myfp_env;
 
 LOCALPROC myfp_SetFPCR(ui5r v)
 {
@@ -6185,49 +6654,24 @@ LOCALPROC myfp_SetFPCR(ui5r v)
 		ReportAbnormalID(0x0202,
 			"Reserved bits not zero in myfp_SetFPCR");
 	}
+
+	/*
+		Keep the exception enable byte (bits 15..8) and mode
+		byte (7..4) so FPCR reads back what was written; the
+		other bits are always zero on a 68881.
+	*/
+	myfp_env.FPCR = v & 0x0000FFF0;
 }
 
 LOCALFUNC ui5r myfp_GetFPCR(void)
 {
-	ui5r v = 0;
-
-	switch (float_rounding_mode) {
-		case float_round_nearest_even:
-			/* v |= (0 << 4); */
-			break;
-		case float_round_to_zero:
-			v |= (1 << 4);
-			break;
-		case float_round_down:
-			v |= (2 << 4);
-			break;
-		case float_round_up:
-			v |= (3 << 4);
-			break;
-	}
-
-	if (80 == floatx80_rounding_precision) {
-		/* v |= (0 << 6); */
-	} else if (32 == floatx80_rounding_precision) {
-		v |= (1 << 6);
-	} else if (64 == floatx80_rounding_precision) {
-		v |= (2 << 6);
-	} else {
-		ReportAbnormalID(0x0203,
-			"Bad rounding precision in myfp_GetFPCR");
-	}
-
-	return v;
+	return myfp_env.FPCR;
 }
-
-LOCALVAR struct myfp_envStruct
-{
-	ui5r FPSR;  /* Floating point status register */
-} myfp_env;
 
 LOCALPROC myfp_SetFPSR(ui5r v)
 {
-	myfp_env.FPSR = v;
+	/* bits 31..28 and 2..0 always read as zero */
+	myfp_env.FPSR = v & 0x0FFFFFF8;
 }
 
 LOCALFUNC ui5r myfp_GetFPSR(void)
@@ -6259,4 +6703,132 @@ LOCALPROC myfp_SetConditionCodeByteFromResult(myfpr *result)
 		| (c_inf  << 1)
 		| (c_zero << 2)
 		| (c_neg  << 3));
+}
+
+/*
+	FPSR exception status (EXC) byte, bits 15..8, and accrued
+	exception (AEXC) byte, bits 7..3. MC68881UM 4.? / M68000PRM
+	1.6.2. FPCR's enable byte uses the EXC bit positions.
+*/
+
+#define myfp_EXC_BSUN  0x8000
+#define myfp_EXC_SNAN  0x4000
+#define myfp_EXC_OPERR 0x2000
+#define myfp_EXC_OVFL  0x1000
+#define myfp_EXC_UNFL  0x0800
+#define myfp_EXC_DZ    0x0400
+#define myfp_EXC_INEX2 0x0200
+#define myfp_EXC_INEX1 0x0100
+
+#define myfp_AEXC_IOP  0x0080
+#define myfp_AEXC_OVFL 0x0040
+#define myfp_AEXC_UNFL 0x0020
+#define myfp_AEXC_DZ   0x0010
+#define myfp_AEXC_INEX 0x0008
+
+/*
+	Start of an operation that can raise floating point
+	exceptions: the EXC byte is cleared (M68000PRM 1.6.2),
+	as are softfloat's flags.
+*/
+LOCALPROC myfp_ClearExceptions(void)
+{
+	float_exception_flags = 0;
+	myfp_env.FPSR &= ~ 0x0000FF00;
+}
+
+/*
+	Translate softfloat's flags for the current operation to EXC
+	bits. Softfloat's invalid means SNAN if an operand was a
+	signaling NaN, otherwise OPERR.
+*/
+LOCALFUNC ui5r myfp_FlagsToEXC(blnr SNaNOperand)
+{
+	ui5r exc = 0;
+	si3r f = float_exception_flags;
+
+	if (0 != (f & float_flag_invalid)) {
+		exc |= SNaNOperand ? myfp_EXC_SNAN : myfp_EXC_OPERR;
+	}
+	if (0 != (f & float_flag_divbyzero)) {
+		exc |= myfp_EXC_DZ;
+	}
+	if (0 != (f & float_flag_overflow)) {
+		exc |= myfp_EXC_OVFL;
+	}
+	if (0 != (f & float_flag_underflow)) {
+		exc |= myfp_EXC_UNFL;
+	}
+	if (0 != (f & float_flag_inexact)) {
+		exc |= myfp_EXC_INEX2;
+	}
+
+	return exc;
+}
+
+/*
+	Record EXC bits and update the accrued byte from the whole
+	EXC byte, M68000PRM 1.6.2:
+		IOP  |= BSUN | SNAN | OPERR
+		OVFL |= OVFL
+		UNFL |= UNFL & INEX2
+		DZ   |= DZ
+		INEX |= INEX1 | INEX2 | OVFL
+*/
+LOCALPROC myfp_SetEXC(ui5r exc)
+{
+	ui5r a = 0;
+
+	exc = (myfp_env.FPSR | exc) & 0x0000FF00;
+	if (0 != (exc & (myfp_EXC_BSUN | myfp_EXC_SNAN | myfp_EXC_OPERR))) {
+		a |= myfp_AEXC_IOP;
+	}
+	if (0 != (exc & myfp_EXC_OVFL)) {
+		a |= myfp_AEXC_OVFL;
+	}
+	if ((0 != (exc & myfp_EXC_UNFL)) && (0 != (exc & myfp_EXC_INEX2))) {
+		a |= myfp_AEXC_UNFL;
+	}
+	if (0 != (exc & myfp_EXC_DZ)) {
+		a |= myfp_AEXC_DZ;
+	}
+	if (0 != (exc & (myfp_EXC_INEX1 | myfp_EXC_INEX2 | myfp_EXC_OVFL))) {
+		a |= myfp_AEXC_INEX;
+	}
+	myfp_env.FPSR |= exc | a;
+}
+
+/*
+	Vector for the highest priority exception that is both
+	present in EXC and enabled in FPCR, or 0. Priority from
+	M68000PRM 1.6.4: BSUN, SNAN, OPERR, OVFL, UNFL, DZ, INEX.
+*/
+LOCALFUNC int myfp_EnabledExcVector(void)
+{
+	ui5r e = myfp_env.FPSR & myfp_env.FPCR & 0x0000FF00;
+
+	if (0 == e) {
+		return 0;
+	} else if (0 != (e & myfp_EXC_BSUN)) {
+		return 48;
+	} else if (0 != (e & myfp_EXC_SNAN)) {
+		return 54;
+	} else if (0 != (e & myfp_EXC_OPERR)) {
+		return 52;
+	} else if (0 != (e & myfp_EXC_OVFL)) {
+		return 53;
+	} else if (0 != (e & myfp_EXC_UNFL)) {
+		return 51;
+	} else if (0 != (e & myfp_EXC_DZ)) {
+		return 50;
+	} else {
+		return 49; /* INEX1 or INEX2 */
+	}
+}
+
+LOCALPROC myfp_Reset(void)
+{
+	myfp_SetFPCR(0);
+	myfp_env.FPSR = 0;
+	float_exception_flags = 0;
 }

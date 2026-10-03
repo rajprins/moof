@@ -87,7 +87,15 @@ LOCALPROC WriteCommonCNFUIALLContents(void)
 
 		WriteDestFileLn("#define HaveUi6Div 1");
 
-		WriteDestFileLn("#define HaveGlbReg 1");
+		/*
+			No HaveGlbReg (or r_pc_p, see SPOTHRCF.i). A global
+			register variable is only sound if nothing else ever
+			uses that register, but AArch64 has no callee-reserved
+			register to give it: x15 (and every other candidate)
+			is caller-saved scratch that system frameworks, Swift
+			and the compiler's own calls freely clobber, so the
+			emulated pc would be corrupted across any host call.
+		*/
 
 		WriteDestFileLn(
 			"#define my_align_8 __attribute__ ((aligned (8)))");

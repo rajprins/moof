@@ -121,6 +121,116 @@ LOCALPROC DisasmOpSizeFromb76(void)
 	}
 }
 
+LOCALPROC DisasmIndexReg(ui4r ext)
+{
+	/* index register Xn.SIZE*SCALE of an extension word */
+	dbglog_writeCStr((0 != (ext & 0x8000)) ? "A" : "D");
+	dbglog_writeHex((ext >> 12) & 7);
+	dbglog_writeCStr((0 != (ext & 0x0800)) ? ".L" : ".W");
+	if (0 != (ext & 0x0600)) {
+		dbglog_writeCStr("*");
+		dbglog_writeHex(1 << ((ext >> 9) & 3));
+	}
+}
+
+LOCALPROC DisasmBaseReg(blnr IsPC, ui5b thereg)
+{
+	if (IsPC) {
+		dbglog_writeCStr("PC");
+	} else {
+		dbglog_writeCStr("A");
+		dbglog_writeHex(thereg);
+	}
+}
+
+/*
+	Address register or PC indirect with index (mode 6, and
+	mode 7 register 3). The extension word is either the brief
+	format (d8,An,Xn) or, on the 68020, the full format with
+	optional base and outer displacements and memory
+	indirection (MC68020UM 2.2.?).
+*/
+LOCALPROC DisasmIndexed(blnr IsPC, ui5b thereg)
+{
+	ui4r ext = Disasm_nextiword();
+
+#if Use68020
+	if (0 == (ext & 0x0100))
+#endif
+	{
+		/* brief format (the only one on a 68000, bit 8 ignored) */
+		dbglog_writeCStr("(");
+		dbglog_writeHex(ui5r_FromSByte(ext));
+		dbglog_writeCStr(", ");
+		DisasmBaseReg(IsPC, thereg);
+		dbglog_writeCStr(", ");
+		DisasmIndexReg(ext);
+		dbglog_writeCStr(")");
+	}
+#if Use68020
+	else
+	{
+		/* full format */
+		blnr BaseSuppress = (0 != (ext & 0x0080));
+		blnr IndexSuppress = (0 != (ext & 0x0040));
+		ui5r iis = ext & 7;
+		ui5r bd = 0;
+		ui5r od = 0;
+
+		switch ((ext >> 4) & 3) {
+			case 2:
+				bd = ui5r_FromSWord(Disasm_nextiword());
+				break;
+			case 3:
+				bd = Disasm_nextilong();
+				break;
+			default:
+				/* null (or reserved) base displacement */
+				break;
+		}
+		switch (iis & 3) {
+			case 2:
+				od = ui5r_FromSWord(Disasm_nextiword());
+				break;
+			case 3:
+				od = Disasm_nextilong();
+				break;
+			default:
+				/* null outer displacement, or no indirection */
+				break;
+		}
+
+		dbglog_writeCStr("(");
+		if (0 != iis) {
+			dbglog_writeCStr("[");
+		}
+		dbglog_writeHex(bd);
+		dbglog_writeCStr(", ");
+		if (BaseSuppress) {
+			dbglog_writeCStr("Z");
+		}
+		DisasmBaseReg(IsPC, thereg);
+		if ((0 != (iis & 4)) && (0 != iis)) {
+			/* postindexed: ([bd,An],Xn,od) */
+			dbglog_writeCStr("]");
+		}
+		if (! IndexSuppress) {
+			dbglog_writeCStr(", ");
+			DisasmIndexReg(ext);
+		}
+		if ((0 == (iis & 4)) && (0 != iis)) {
+			/* preindexed: ([bd,An,Xn],od) */
+			dbglog_writeCStr("]");
+		}
+		if (0 != iis) {
+			dbglog_writeCStr(", ");
+			dbglog_writeHex(od);
+		}
+		dbglog_writeCStr(")");
+	}
+#endif
+}
+
 LOCALPROC DisasmModeRegister(ui5b themode, ui5b thereg)
 {
 	switch (themode) {
@@ -154,11 +264,7 @@ LOCALPROC DisasmModeRegister(ui5b themode, ui5b thereg)
 			dbglog_writeCStr(")");
 			break;
 		case 6 :
-			dbglog_writeCStr("???");
-#if 0
-			ArgKind = AKMemory;
-			ArgAddr.mem = get_disp_ea(m68k_areg(thereg));
-#endif
+			DisasmIndexed(falseblnr, thereg);
 			break;
 		case 7 :
 			switch (thereg) {
@@ -182,11 +288,7 @@ LOCALPROC DisasmModeRegister(ui5b themode, ui5b thereg)
 					}
 					break;
 				case 3 :
-					dbglog_writeCStr("???");
-#if 0
-					ArgKind = AKMemory;
-					s = get_disp_ea(Disasm_pc);
-#endif
+					DisasmIndexed(trueblnr, 0);
 					break;
 				case 4 :
 					dbglog_writeCStr("#");
@@ -204,6 +306,32 @@ LOCALPROC DisasmModeRegister(ui5b themode, ui5b thereg)
 			dbglog_writeCStr("#");
 			dbglog_writeHex(thereg);
 			break;
+	}
+}
+
+/*
+	MOVEM register list, D0-D7/A0-A7 separated by '/'. For the
+	predecrement mode the mask is reversed: bit 0 is A7.
+*/
+LOCALPROC DisasmRegList(ui5r regmask, blnr reversed)
+{
+	si4b z;
+	blnr first = trueblnr;
+
+	for (z = 0; z < 16; ++z) {
+		if ((regmask & (1 << (reversed ? (15 - z) : z))) != 0) {
+			if (! first) {
+				dbglog_writeCStr("/");
+			}
+			first = falseblnr;
+			if (z >= 8) {
+				dbglog_writeCStr("A");
+				dbglog_writeHex(z - 8);
+			} else {
+				dbglog_writeCStr("D");
+				dbglog_writeHex(z);
+			}
+		}
 	}
 }
 
@@ -254,6 +382,7 @@ LOCALPROC DisasmsAA_xxxxdddxssxxxrrr(char *s)
 {
 	DisasmStartOne(s);
 	DisasmOpSizeFromb76();
+	dbglog_writeCStr(" ");
 	DisasmModeRegister(3, Disasm_reg);
 	dbglog_writeCStr(", ");
 	DisasmModeRegister(3, Disasm_rg9);
@@ -346,13 +475,13 @@ LOCALPROCUSEDONCE DisasmCompare(void)
 LOCALPROCUSEDONCE DisasmCmpI(void)
 {
 	/* CMPI 00001100ssmmmrrr */
-	DisasmI_xxxxxxxxssmmmrrr("CMP");
+	DisasmI_xxxxxxxxssmmmrrr("CMPI");
 }
 
 LOCALPROCUSEDONCE DisasmCmpM(void)
 {
 	/* CmpM 1011ddd1ss001rrr */
-	DisasmsAA_xxxxdddxssxxxrrr("CMP");
+	DisasmsAA_xxxxdddxssxxxrrr("CMPM");
 }
 
 LOCALPROC DisasmCC(void)
@@ -597,7 +726,6 @@ LOCALPROCUSEDONCE DisasmLinkA6(void)
 LOCALPROCUSEDONCE DisasmMOVEMRmM(void)
 {
 	/* MOVEM reg to mem 0100100011s100rrr */
-	si4b z;
 	ui5r regmask;
 
 	DisasmStartOne("MOVEM");
@@ -609,17 +737,7 @@ LOCALPROCUSEDONCE DisasmMOVEMRmM(void)
 	dbglog_writeCStr(" ");
 	regmask = Disasm_nextiword();
 
-	for (z = 16; --z >= 0; ) {
-		if ((regmask & (1 << (15 - z))) != 0) {
-			if (z >= 8) {
-				dbglog_writeCStr("A");
-				dbglog_writeHex(z - 8);
-			} else {
-				dbglog_writeCStr("D");
-				dbglog_writeHex(z);
-			}
-		}
-	}
+	DisasmRegList(regmask, trueblnr);
 	dbglog_writeCStr(", -(A");
 	dbglog_writeHex(Disasm_reg);
 	dbglog_writeCStr(")");
@@ -629,7 +747,6 @@ LOCALPROCUSEDONCE DisasmMOVEMRmM(void)
 LOCALPROCUSEDONCE DisasmMOVEMApR(void)
 {
 	/* MOVEM mem to reg 0100110011s011rrr */
-	si4b z;
 	ui5r regmask;
 
 	regmask = Disasm_nextiword();
@@ -644,23 +761,13 @@ LOCALPROCUSEDONCE DisasmMOVEMApR(void)
 	dbglog_writeHex(Disasm_reg);
 	dbglog_writeCStr(")+, ");
 
-	for (z = 0; z < 16; ++z) {
-		if ((regmask & (1 << z)) != 0) {
-			if (z >= 8) {
-				dbglog_writeCStr("A");
-				dbglog_writeHex(z - 8);
-			} else {
-				dbglog_writeCStr("D");
-				dbglog_writeHex(z);
-			}
-		}
-	}
+	DisasmRegList(regmask, falseblnr);
 	dbglog_writeReturn();
 }
 
 LOCALPROCUSEDONCE DisasmUnlkA6(void)
 {
-	DisasmStartOne("UNLINK A6");
+	DisasmStartOne("UNLK A6");
 	dbglog_writeReturn();
 }
 
@@ -758,7 +865,7 @@ LOCALPROC DisasmBinOp1(ui5r x)
 				DisasmStartOne("LSR");
 				break;
 			case 2:
-				DisasmStartOne("RXR");
+				DisasmStartOne("ROXR");
 				break;
 			case 3:
 				DisasmStartOne("ROR");
@@ -776,7 +883,7 @@ LOCALPROC DisasmBinOp1(ui5r x)
 				DisasmStartOne("LSL");
 				break;
 			case 2:
-				DisasmStartOne("RXL");
+				DisasmStartOne("ROXL");
 				break;
 			case 3:
 				DisasmStartOne("ROL");
@@ -1130,7 +1237,6 @@ LOCALPROC DisasmBinOpStatusCCR(void)
 
 LOCALPROC disasmreglist(si4b direction, ui5b m1, ui5b r1)
 {
-	si4b z;
 	ui5r regmask;
 
 	DisasmStartOne("MOVEM");
@@ -1151,17 +1257,7 @@ LOCALPROC disasmreglist(si4b direction, ui5b m1, ui5b r1)
 		dbglog_writeCStr(", ");
 	}
 
-	for (z = 0; z < 16; ++z) {
-		if ((regmask & (1 << z)) != 0) {
-			if (z >= 8) {
-				dbglog_writeCStr("A");
-				dbglog_writeHex(z - 8);
-			} else {
-				dbglog_writeCStr("D");
-				dbglog_writeHex(z);
-			}
-		}
-	}
+	DisasmRegList(regmask, falseblnr);
 
 	if (direction == 0) {
 		dbglog_writeCStr(", ");
@@ -1186,8 +1282,8 @@ LOCALPROCUSEDONCE DisasmMOVEMmr(void)
 LOCALPROC DisasmByteBinOp(char *s, ui5b m1, ui5b r1, ui5b m2, ui5b r2)
 {
 	DisasmStartOne(s);
-	dbglog_writeCStr(" ");
 	DisasmOpSizeFromb76();
+	dbglog_writeCStr(" ");
 	DisasmModeRegister(m1, r1);
 	dbglog_writeCStr(", ");
 	DisasmModeRegister(m2, r2);
@@ -1209,13 +1305,13 @@ LOCALPROCUSEDONCE DisasmAbcdm(void)
 LOCALPROCUSEDONCE DisasmSbcdr(void)
 {
 	/* SBCD 1000xxx100000xxx */
-	DisasmByteBinOp("ABCD", 0, Disasm_reg, 0, Disasm_rg9);
+	DisasmByteBinOp("SBCD", 0, Disasm_reg, 0, Disasm_rg9);
 }
 
 LOCALPROCUSEDONCE DisasmSbcdm(void)
 {
 	/* SBCD 1000xxx100001xxx */
-	DisasmByteBinOp("ABCD", 4, Disasm_reg, 4, Disasm_rg9);
+	DisasmByteBinOp("SBCD", 4, Disasm_reg, 4, Disasm_rg9);
 }
 
 LOCALPROCUSEDONCE DisasmNbcd(void)
@@ -1325,7 +1421,7 @@ LOCALPROCUSEDONCE DisasmLink(void)
 
 LOCALPROCUSEDONCE DisasmUnlk(void)
 {
-	DisasmStartOne("UNLINK A");
+	DisasmStartOne("UNLK A");
 	dbglog_writeHex(Disasm_reg);
 	dbglog_writeReturn();
 }
@@ -1652,29 +1748,90 @@ LOCALPROCUSEDONCE DisasmCHK2orCMP2(void)
 #endif
 
 #if Use68020
+LOCALPROC DisasmCASSize(void)
+{
+	/* CAS, CAS2 size field is bits 10..9: 1 byte, 2 word, 3 long */
+	switch ((Disasm_opcode >> 9) & 3) {
+		case 1:
+			Disasm_opsize = 1;
+			dbglog_writeCStr(".B ");
+			break;
+		case 2:
+			Disasm_opsize = 2;
+			dbglog_writeCStr(".W ");
+			break;
+		default:
+			Disasm_opsize = 4;
+			dbglog_writeCStr(".L ");
+			break;
+	}
+}
+
 LOCALPROCUSEDONCE DisasmCAS2(void)
 {
-	DisasmStartOne("CAS2 ???");
+	/* CAS2 Dc1:Dc2, Du1:Du2, (Rn1):(Rn2) */
+	ui4r ext1 = Disasm_nextiword();
+	ui4r ext2 = Disasm_nextiword();
+
+	DisasmStartOne("CAS2");
+	DisasmCASSize();
+	dbglog_writeCStr("D");
+	dbglog_writeHex(ext1 & 7);
+	dbglog_writeCStr(":D");
+	dbglog_writeHex(ext2 & 7);
+	dbglog_writeCStr(", D");
+	dbglog_writeHex((ext1 >> 6) & 7);
+	dbglog_writeCStr(":D");
+	dbglog_writeHex((ext2 >> 6) & 7);
+	dbglog_writeCStr(", (");
+	DisasmModeRegister((ext1 >> 15) & 1, (ext1 >> 12) & 7);
+	dbglog_writeCStr("):(");
+	DisasmModeRegister((ext2 >> 15) & 1, (ext2 >> 12) & 7);
+	dbglog_writeCStr(")");
 	dbglog_writeReturn();
-	/* DoCAS2 */
 }
 #endif
 
 #if Use68020
 LOCALPROCUSEDONCE DisasmCAS(void)
 {
-	DisasmStartOne("CAS ???");
+	/* CAS Dc, Du, <ea> */
+	ui4r ext = Disasm_nextiword();
+
+	DisasmStartOne("CAS");
+	DisasmCASSize();
+	dbglog_writeCStr("D");
+	dbglog_writeHex(ext & 7);
+	dbglog_writeCStr(", D");
+	dbglog_writeHex((ext >> 6) & 7);
+	dbglog_writeCStr(", ");
+	DisasmModeRegister(Disasm_mode, Disasm_reg);
 	dbglog_writeReturn();
-	/* DoDoCAS */
 }
 #endif
 
 #if Use68020
 LOCALPROCUSEDONCE DisasmMOVES(void)
 {
-	DisasmStartOne("MOVES ???");
+	/* MOVES 00001110ssmmmrrr, Rn in extension word bits 15..12 */
+	ui4r ext = Disasm_nextiword();
+	ui5b rmode = (ext >> 15) & 1;
+	ui5b rreg = (ext >> 12) & 7;
+
+	DisasmStartOne("MOVES");
+	DisasmOpSizeFromb76();
+	dbglog_writeCStr(" ");
+	if (0 != (ext & 0x0800)) {
+		/* register to memory */
+		DisasmModeRegister(rmode, rreg);
+		dbglog_writeCStr(", ");
+		DisasmModeRegister(Disasm_mode, Disasm_reg);
+	} else {
+		DisasmModeRegister(Disasm_mode, Disasm_reg);
+		dbglog_writeCStr(", ");
+		DisasmModeRegister(rmode, rreg);
+	}
 	dbglog_writeReturn();
-	/* DoMOVES */
 }
 #endif
 
@@ -1889,7 +2046,7 @@ LOCALPROCUSEDONCE DisasmCode0(void)
 					DisasmCAS2();
 				} else {
 					/* CAS 00001ss011mmmrrr */
-					DisasmCAS2();
+					DisasmCAS();
 				}
 			} else
 			if (Disasm_rg9 == 3) {
@@ -1912,7 +2069,7 @@ LOCALPROCUSEDONCE DisasmCode0(void)
 #if Use68020
 			/* MoveS 00001110ssmmmrrr */
 			if (IsValidAltMemAddrMode()) {
-				DisasmMoveSREa();
+				DisasmMOVES();
 			} else {
 				DisasmIllegal();
 			}
