@@ -98,6 +98,7 @@ LOCALPROC get_sockaddrs(int addrs, struct sockaddr* sa,
 LOCALFUNC int get_ethernet(void)
 {
 	int result;
+	ssize_t io_count;
 	int size;
 	struct rt_msghdr* message = NULL;
 	struct sockaddr_in* addrs;
@@ -109,9 +110,8 @@ LOCALFUNC int get_ethernet(void)
 	char filename[64];
 	struct ifreq ifreq;
 	int enable = 1;
-	struct kinfo_proc kp;
-	size_t len = sizeof(kp);
-	int max = 4;
+	int max;
+	size_t len = sizeof(max);
 	int v = falseblnr;
 
 	char device[32];
@@ -142,14 +142,14 @@ LOCALFUNC int get_ethernet(void)
 	addrs->sin_addr.s_addr = 0; /* 0.0.0.0 is default route */
 
 	/* Send the message to the kernel */
-	result = write(fd, message, size);
-	if (result < 0) {
+	io_count = write(fd, message, size);
+	if (io_count < 0) {
 		goto label_exit;
 	}
 
 	/* Read the result from the kernel */
-	result = read(fd, message, size);
-	if (result < 0) {
+	io_count = read(fd, message, size);
+	if (io_count < 0) {
 		goto label_exit;
 	}
 
@@ -192,14 +192,14 @@ LOCALFUNC int get_ethernet(void)
 	memcpy(device_address, &link->sdl_data[namelen], 6);
 	memcpy(&(tx_buffer[6]), &link->sdl_data[namelen], 6);
 
-	result = sysctlbyname("debug.bpf_maxdevices", &kp, &len, NULL, 0);
-	if (result == -1) {
+	/* debug.bpf_maxdevices is a plain int (see bpf(4)) */
+	result = sysctlbyname("debug.bpf_maxdevices", &max, &len, NULL, 0);
+	if ((result == -1) || (len != sizeof(max)) || (max <= 0)) {
 		goto label_exit;
 	}
-	max = *((int *)&kp);
 
 	for (loop = 0; loop < max; loop++) {
-		sprintf(filename, "/dev/bpf%d", loop);
+		(void) snprintf(filename, sizeof(filename), "/dev/bpf%d", loop);
 		fd = open(filename, O_RDWR | O_NONBLOCK | O_EXLOCK);
 		if (fd >= 0) {
 			/* sprintf(buffer, "using %s\n", filename); */
@@ -243,8 +243,16 @@ LOCALFUNC int get_ethernet(void)
 		goto label_exit;
 	}
 
+	/*
+		The record walk in LT_ReceivePacket assumes the bpf_hdr
+		layout these headers describe, so refuse a kernel BPF whose
+		version is incompatible, as bpf(4) recommends.
+	*/
 	result = ioctl(fd, BIOCVERSION, &bpf_version);
-	if (result) {
+	if (result
+		|| (bpf_version.bv_major != BPF_MAJOR_VERSION)
+		|| (bpf_version.bv_minor < BPF_MINOR_VERSION))
+	{
 		goto label_exit;
 	}
 
@@ -283,6 +291,8 @@ LOCALVAR unsigned char *MyRxBuffer = NULL;
 */
 LOCALFUNC int InitLocalTalk(void)
 {
+	ui5r stamp;
+
 	/*
 		Perform a lot of stuff to get access to the Ethernet.
 		Failing is not fatal - opening /dev/bpf* generally needs
@@ -301,8 +311,11 @@ LOCALFUNC int InitLocalTalk(void)
 		Save the process id in the transmit buffer as it may be used
 		later to uniquely identify the sender to identify collisions
 		in dynamic llap node address assignment.
+		tx_buffer[14] is not 4 byte aligned, so storing through a
+		uint32_t pointer would be undefined behaviour; copy bytes.
 	*/
-	*((uint32_t*)(&tx_buffer[14])) = htonl(LT_MyStamp /* getpid() */);
+	stamp = htonl(LT_MyStamp);
+	memcpy(&tx_buffer[14], &stamp, 4);
 
 	LT_TxBuffer = (ui3p)&tx_buffer[20];
 
@@ -331,20 +344,51 @@ LOCALPROC UnInitLocalTalk(void)
 
 GLOBALOSGLUPROC LT_TransmitPacket(void)
 {
-	int count;
+	ssize_t count;
+	uint16_t llap_length;
+
+	/*
+		If get_ethernet failed there is no BPF device; LocalTalk is
+		inert and the frame is simply lost, as on an unplugged
+		network.
+	*/
+	if (fd < 0) {
+		return;
+	}
+
+	/*
+		SCC_PutWR8 already stops LT_TxBuffSz at LT_TxBfMxSz, but
+		tx_buffer has room for exactly that many bytes after the
+		header, so check here too rather than trust a distant caller
+		with a read past the end of the buffer.
+	*/
+	if (LT_TxBuffSz > LT_TxBfMxSz) {
+		return;
+	}
 
 	/*
 		Write the length in the packet.  This is needed because
 		Ethernet has a minimum 60 bytes length, which the MAC chip
 		will enforce on TX.  Without the size, a simple 3 byte LLAP
 		packet would look like a (60 - 14 =) 46 byte LLAP packet.
+		tx_buffer[18] is not 2 byte aligned, so copy bytes.
 	*/
-	*((uint16_t*)(&tx_buffer[18])) = htons(LT_TxBuffSz);
+	llap_length = htons(LT_TxBuffSz);
+	memcpy(&tx_buffer[18], &llap_length, 2);
 
 	/* Send the packet to Ethernet */
 	count = write(fd, tx_buffer, 20 + LT_TxBuffSz);
-
-	(void)count; /* unused */
+	if (count < 0) {
+		/*
+			A lost frame is normal LocalTalk behaviour, and the
+			protocols above LLAP retransmit, so just note it.
+		*/
+#if BPF_dolog
+		dbglog_writeCStr("BPF write fails, errno ");
+		dbglog_writeNum(errno);
+		dbglog_writeReturn();
+#endif
+	}
 }
 
 LOCALVAR unsigned char* NextPacket = NULL;
@@ -354,7 +398,7 @@ LOCALPROC LocalTalkTick0(void)
 {
 	/* Get a single buffer worth of packets from BPF */
 	unsigned char* device_buffer = MyRxBuffer;
-	int bytes;
+	ssize_t bytes;
 
 	if ((fd < 0) || (NULL == device_buffer)) {
 		return;
@@ -386,17 +430,52 @@ label_retry:
 		NextPacket = NULL;
 		goto label_retry;
 	} else {
+		/*
+			Everything below is read from a buffer the kernel filled
+			with frames from the network, so each record's lengths
+			are checked against the bytes actually read before they
+			are believed. A record that does not fit means the
+			buffer is not what we think it is, so drop the rest.
+		*/
 		unsigned char* packet = NextPacket;
-		/* Get pointer to BPF header */
-		struct bpf_hdr* header = (struct bpf_hdr *)packet;
+		size_t remaining = EndPackets - NextPacket;
+		struct bpf_hdr header;
+		size_t advance;
+		unsigned char *buff;
+		unsigned char* start;
+		int payload_length;
+		int llap_length;
+		uint16_t length_field;
+		uint32_t stamp_field;
 
-		/* Advance to next packet in buffer */
-		NextPacket += BPF_WORDALIGN(header->bh_hdrlen
-			+ header->bh_caplen);
+		if (remaining < sizeof(header)) {
+			NextPacket = NULL;
+			goto label_retry;
+		}
+		memcpy(&header, packet, sizeof(header));
+
+		if ((header.bh_hdrlen < sizeof(header))
+			|| (header.bh_hdrlen > remaining)
+			|| (header.bh_caplen > remaining - header.bh_hdrlen))
+		{
+			NextPacket = NULL;
+			goto label_retry;
+		}
+
+		/*
+			Advance to next packet in buffer. The last record need
+			not be padded out to the alignment, so never step past
+			EndPackets (forming such a pointer is itself undefined).
+		*/
+		advance = BPF_WORDALIGN(header.bh_hdrlen + header.bh_caplen);
+		if (advance > remaining) {
+			advance = remaining;
+		}
+		NextPacket += advance;
 
 		/* Get clean references to data */
-		unsigned char *buff = packet + header->bh_hdrlen;
-		unsigned char* start = buff + 20;
+		buff = packet + header.bh_hdrlen;
+		start = buff + 20;
 		/*
 			The payload begins 20 bytes into the frame: 14 bytes of
 			Ethernet header, then the 4 byte stamp and the 2 byte
@@ -404,25 +483,35 @@ label_retry:
 			bh_caplen - 20 bytes of payload were actually captured,
 			and a frame too short to hold the length field has none.
 		*/
-		int payload_length = (int)header->bh_caplen - 20;
-		int llap_length;
+		payload_length = (int)header.bh_caplen - 20;
 
 		if (payload_length < 0) {
 			goto label_retry;
 		}
 
-		llap_length = ntohs(*((uint16_t*)(buff + 18)));
+		/*
+			buff + 14 and buff + 18 are not suitably aligned for
+			direct uint32_t / uint16_t loads, so copy bytes.
+		*/
+		memcpy(&length_field, buff + 18, 2);
+		llap_length = ntohs(length_field);
 
-		if (llap_length <= payload_length) {
+		/*
+			The SCC reads the 3 byte LLAP header (destination,
+			source, type) in LT_RxBuffer[0..2] unconditionally, so a
+			shorter frame would expose bytes we did not receive.
+		*/
+		if ((llap_length >= 3) && (llap_length <= payload_length)) {
+			memcpy(&stamp_field, buff + 14, 4);
+
 			/* Start the receiver */
-			CertainlyNotMyPacket = (LT_MyStamp !=
-				ntohl(*((uint32_t*)(buff + 14))));
+			CertainlyNotMyPacket = (LT_MyStamp != ntohl(stamp_field));
 
 #if BPF_dolog
 			dbglog_writeCStr("LT_MyStamp: ");
 			dbglog_writeNum(LT_MyStamp);
 			dbglog_writeCStr(", received stamp: ");
-			dbglog_writeNum(ntohl(*((uint32_t*)(buff + 14))));
+			dbglog_writeNum(ntohl(stamp_field));
 			dbglog_writeCStr(", CertainlyNotMyPacket: ");
 			dbglog_writeNum(CertainlyNotMyPacket);
 			dbglog_writeReturn();

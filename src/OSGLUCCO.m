@@ -1314,8 +1314,9 @@ GLOBALOSGLUFUNC tMacErr HTCEimport(tPbuf *r)
 LOCALFUNC blnr EntropyGather(void)
 {
 	/*
-		gather some entropy from several places, just in case
-		/dev/urandom is not available.
+		gather some entropy from several places. the system random
+		source below should make these irrelevant, but they cost
+		nothing and keep e_p varied even if it were broken.
 	*/
 
 	{
@@ -1338,59 +1339,41 @@ LOCALFUNC blnr EntropyGather(void)
 
 	{
 		ui5b dat[2];
-		int fd;
 
-		if (-1 == (fd = open("/dev/urandom", O_RDONLY))) {
-#if dbglog_HAVE
-			dbglog_writeCStr("open /dev/urandom fails");
-			dbglog_writeNum(errno);
-			dbglog_writeCStr(" (");
-			dbglog_writeCStr(strerror(errno));
-			dbglog_writeCStr(")");
-			dbglog_writeReturn();
-#endif
-		} else {
-
-			if (read(fd, &dat, sizeof(dat)) < 0) {
-#if dbglog_HAVE
-				dbglog_writeCStr("open /dev/urandom fails");
-				dbglog_writeNum(errno);
-				dbglog_writeCStr(" (");
-				dbglog_writeCStr(strerror(errno));
-				dbglog_writeCStr(")");
-				dbglog_writeReturn();
-#endif
-			} else {
+		/*
+			arc4random_buf is in libc on every macOS version and
+			cannot fail, unlike opening and reading /dev/urandom,
+			which needs a file descriptor and can be refused (for
+			instance by a sandbox profile). It draws from the same
+			kernel generator.
+		*/
+		arc4random_buf(dat, sizeof(dat));
 
 #if dbglog_HAVE
-				dbglog_writeCStr("dat: ");
-				dbglog_writeHex(dat[0]);
-				dbglog_writeCStr(" ");
-				dbglog_writeHex(dat[1]);
-				dbglog_writeReturn();
+		dbglog_writeCStr("dat: ");
+		dbglog_writeHex(dat[0]);
+		dbglog_writeCStr(" ");
+		dbglog_writeHex(dat[1]);
+		dbglog_writeReturn();
 #endif
 
-				e_p[0] ^= dat[0];
-				e_p[1] ^= dat[1];
-					/*
-						if "/dev/urandom" is working correctly,
-						this should make the previous contents of e_p
-						irrelevant. if it is completely broken, like
-						returning 0, this will not make e_p any less
-						random.
-					*/
+		e_p[0] ^= dat[0];
+		e_p[1] ^= dat[1];
+			/*
+				if arc4random_buf is working correctly,
+				this should make the previous contents of e_p
+				irrelevant. if it is completely broken, like
+				returning 0, this will not make e_p any less
+				random.
+			*/
 
 #if dbglog_HAVE
-				dbglog_writeCStr("ep: ");
-				dbglog_writeHex(e_p[0]);
-				dbglog_writeCStr(" ");
-				dbglog_writeHex(e_p[1]);
-				dbglog_writeReturn();
+		dbglog_writeCStr("ep: ");
+		dbglog_writeHex(e_p[0]);
+		dbglog_writeCStr(" ");
+		dbglog_writeHex(e_p[1]);
+		dbglog_writeReturn();
 #endif
-			}
-
-			close(fd);
-		}
 	}
 
 	return trueblnr;
