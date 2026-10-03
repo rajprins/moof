@@ -321,7 +321,7 @@ LOCALFUNC tMacErr vSonyNextPendingInsert(tDrive *Drive_No)
 #if NonDiskProtect
 				if (L < checkheadersize) {
 					WarnMsgUnsupportedDisk();
-					result = -1;
+					result = mnvm_miscErr;
 				} else
 #endif
 				if (mnvm_noErr == (result = vSonyTransfer(falseblnr,
@@ -439,26 +439,46 @@ LOCALFUNC tMacErr vSonyNextPendingInsert(tDrive *Drive_No)
 						}
 					}
 
-					// Handle file with HFS partitions. Based on the Basilisk II find_hfs_partition implementation.
+					/*
+						Image with an Apple partition map: mount the
+						first Apple_HFS partition. Based on Basilisk II
+						find_hfs_partition. The partition's start and
+						length come from the image, so check them
+						against the image size before trusting them.
+					*/
 					if (! gotFormat) {
-						int i;
-						for (i = 0; i < checkheaderblocks; i++) {
-							ui4r drSigWord = do_get_mem_word(&Temp[512 * i]);
-							if (drSigWord == 0x504D) { // HFS partition map magic number.
-								ui3p map = &Temp[512 * i];
-								if (strcmp((char *)(map + 48), "Apple_HFS") == 0) {
-									DataOffset = ((map[8] << 24) | (map[9] << 16) | (map[10] << 8) | map[11]) << 9;
-									DataSize = 512 * ((map[12] << 24) | (map[13] << 16) | (map[14] << 8) | map[15]);
+						ui5r j;
+						ui5r ImageBlocks = L >> 9;
+
+						for (j = 0; j < checkheaderblocks; j++) {
+							ui3p map = &Temp[512 * j];
+
+							if (0x504D != do_get_mem_word(map)) {
+								/* not a 'PM' partition map entry */
+								continue;
+							}
+							/* pmPartType, including terminating 0 */
+							if (0 == memcmp(map + 48, "Apple_HFS", 10)) {
+								ui5r pyStart = do_get_mem_long(map + 8);
+								ui5r blkCnt = do_get_mem_long(map + 12);
+
+								if ((pyStart < ImageBlocks)
+									&& (blkCnt != 0)
+									&& (blkCnt <= ImageBlocks - pyStart))
+								{
+									/* can't overflow, both < L */
+									DataOffset = pyStart << 9;
+									DataSize = blkCnt << 9;
 									gotFormat = trueblnr;
-									break;
 								}
+								break;
 							}
 						}
 					}
 
 					if (! gotFormat) {
 						WarnMsgUnsupportedDisk();
-						result = -1;
+						result = mnvm_miscErr;
 					}
 #endif
 				}

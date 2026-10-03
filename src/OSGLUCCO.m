@@ -734,14 +734,22 @@ GLOBALOSGLUFUNC tMacErr vSonyTransfer(blnr IsWrite, ui3p Buffer,
 
 		if (NewSony_Count == Sony_Count) {
 			err = mnvm_noErr;
+		} else if ((! IsWrite) && feof(refnum) && ! ferror(refnum)) {
+			/*
+				Read ran past the end of the image. That is
+				eofErr, as the File Manager would report it, not
+				a failure of the host file.
+			*/
+			err = mnvm_eofErr;
 		}
+		clearerr(refnum);
 	}
 
 	if (nullpr != Sony_ActCount) {
 		*Sony_ActCount = NewSony_Count;
 	}
 
-	return err; /*& figure out what really to return &*/
+	return err;
 }
 
 GLOBALOSGLUFUNC tMacErr vSonyGetSize(tDrive Drive_No, ui5r *Sony_Count)

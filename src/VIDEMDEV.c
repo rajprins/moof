@@ -37,7 +37,7 @@
 #include "VIDEMDEV.h"
 
 /*
-	ReportAbnormalID unused 0x0A08 - 0x0AFF
+	ReportAbnormalID unused 0x0A05, 0x0A08 - 0x0AFF
 */
 
 #define VID_dolog (dbglog_HAVE && 0)
@@ -48,19 +48,19 @@ LOCALVAR const ui3b VidDrvr_contents[] = {
 0x00, 0xB6, 0x15, 0x2E, 0x44, 0x69, 0x73, 0x70,
 0x6C, 0x61, 0x79, 0x5F, 0x56, 0x69, 0x64, 0x65,
 0x6F, 0x5F, 0x53, 0x61, 0x6D, 0x70, 0x6C, 0x65,
-0x00, 0x00, 0x24, 0x48, 0x26, 0x49, 0x70, 0x04,
-0xA4, 0x40, 0x70, 0x04, 0xA7, 0x22, 0x66, 0x00,
-0x00, 0x50, 0x27, 0x48, 0x00, 0x14, 0xA0, 0x29,
+0x00, 0x00, 0x48, 0xE7, 0x00, 0xD8, 0x26, 0x49,
+0x70, 0x04, 0xA4, 0x40, 0x70, 0x04, 0xA7, 0x22,
+0x66, 0x4A, 0x27, 0x48, 0x00, 0x14, 0xA0, 0x29,
 0x49, 0xFA, 0x00, 0x4A, 0x70, 0x10, 0xA7, 0x1E,
-0x66, 0x00, 0x00, 0x3E, 0x31, 0x7C, 0x00, 0x06,
-0x00, 0x04, 0x21, 0x4C, 0x00, 0x08, 0x21, 0x4B,
-0x00, 0x0C, 0x70, 0x00, 0x10, 0x2B, 0x00, 0x28,
-0xA0, 0x75, 0x66, 0x24, 0x22, 0x6B, 0x00, 0x14,
-0x22, 0x51, 0x22, 0x88, 0x3F, 0x3C, 0x00, 0x01,
-0x55, 0x4F, 0x3F, 0x3C, 0x00, 0x03, 0x41, 0xFA,
-0x00, 0x9C, 0x2F, 0x18, 0x20, 0x50, 0x20, 0x8F,
-0xDE, 0xFC, 0x00, 0x0A, 0x70, 0x00, 0x60, 0x02,
-0x70, 0xE9, 0x4E, 0x75, 0x2F, 0x08, 0x55, 0x4F,
+0x66, 0x3A, 0x31, 0x7C, 0x00, 0x06, 0x00, 0x04,
+0x21, 0x4C, 0x00, 0x08, 0x21, 0x4B, 0x00, 0x0C,
+0x70, 0x00, 0x10, 0x2B, 0x00, 0x28, 0xA0, 0x75,
+0x66, 0x22, 0x22, 0x6B, 0x00, 0x14, 0x22, 0x51,
+0x22, 0x88, 0x48, 0x78, 0x00, 0x01, 0x3F, 0x3C,
+0x00, 0x03, 0x41, 0xFA, 0x00, 0xA0, 0x2F, 0x18,
+0x20, 0x50, 0x20, 0x8F, 0xDE, 0xFC, 0x00, 0x0A,
+0x70, 0x00, 0x60, 0x02, 0x70, 0xE9, 0x4C, 0xDF,
+0x1B, 0x00, 0x4E, 0x75, 0x2F, 0x08, 0x55, 0x4F,
 0x3F, 0x3C, 0x00, 0x04, 0x41, 0xFA, 0x00, 0x7E,
 0x2F, 0x18, 0x20, 0x50, 0x20, 0x8F, 0x50, 0x4F,
 0x20, 0x29, 0x00, 0x2A, 0xE1, 0x98, 0x02, 0x40,
@@ -481,9 +481,42 @@ GLOBALFUNC ui4r Vid_Reset(void)
 #define VDGammaRecord_csGTable 0
 
 #define VidBaseAddr 0xF9900000
-	/* appears to be completely ignored */
+	/*
+		appears to be completely ignored. The OS takes the
+		frame buffer address from the slot resources instead.
+		It is where the frame buffer is mapped, in both 24 bit
+		($900000) and 32 bit mode (see SetUp_address32).
+	*/
 
 LOCALVAR blnr UseGrayTones = falseblnr;
+
+#if (0 != vMacScreenDepth) && (vMacScreenDepth < 4)
+LOCALPROC Vid_SetCLUTEntry(int j, ui4r r, ui4r g, ui4r b)
+{
+	if (UseGrayTones) {
+		/*
+			"Designing Cards and Drivers": in gray mode SetEntries
+			stores the luminance of each color instead.
+		*/
+		ui4r y = (ui4r)(((ui5r)r * 30 + (ui5r)g * 59
+			+ (ui5r)b * 11) / 100);
+
+		r = y;
+		g = y;
+		b = y;
+	}
+	CLUT_reds[j] = r;
+	CLUT_greens[j] = g;
+	CLUT_blues[j] = b;
+}
+
+LOCALPROC Vid_GetCLUTEntry(int j, CPTR csTable)
+{
+	put_vm_word(csTable + 2, CLUT_reds[j]);
+	put_vm_word(csTable + 4, CLUT_greens[j]);
+	put_vm_word(csTable + 6, CLUT_blues[j]);
+}
+#endif
 
 LOCALPROC FillScreenWithGrayPattern(void)
 {
@@ -609,8 +642,10 @@ GLOBALPROC ExtnVideo_Access(CPTR p)
 							csParam + VDPageInfo_csPage))
 						{
 							/* return mnvm_controlErr, page must be 0 */
+#if ExtraAbnormalReports
 							ReportAbnormalID(0x0A02,
 								"SetVidMode not page 0");
+#endif
 						} else {
 							result = Vid_SetMode(get_vm_word(
 								csParam + VDPageInfo_csMode));
@@ -650,15 +685,10 @@ GLOBALPROC ExtnVideo_Access(CPTR p)
 										result = mnvm_paramErr;
 									} else
 									{
-										ui4r r =
-											get_vm_word(csTable + 2);
-										ui4r g =
-											get_vm_word(csTable + 4);
-										ui4r b =
-											get_vm_word(csTable + 6);
-										CLUT_reds[j] = r;
-										CLUT_greens[j] = g;
-										CLUT_blues[j] = b;
+										Vid_SetCLUTEntry(j,
+											get_vm_word(csTable + 2),
+											get_vm_word(csTable + 4),
+											get_vm_word(csTable + 6));
 									}
 									csTable += 8;
 								}
@@ -684,15 +714,10 @@ GLOBALPROC ExtnVideo_Access(CPTR p)
 										/* ignore input, leave black */
 									} else
 									{
-										ui4r r =
-											get_vm_word(csTable + 2);
-										ui4r g =
-											get_vm_word(csTable + 4);
-										ui4r b =
-											get_vm_word(csTable + 6);
-										CLUT_reds[j] = r;
-										CLUT_greens[j] = g;
-										CLUT_blues[j] = b;
+										Vid_SetCLUTEntry(j,
+											get_vm_word(csTable + 2),
+											get_vm_word(csTable + 4),
+											get_vm_word(csTable + 6));
 									}
 									csTable += 8;
 								}
@@ -783,8 +808,15 @@ GLOBALPROC ExtnVideo_Access(CPTR p)
 						*/
 						break;
 					default:
+						/*
+							return mnvm_controlErr, as a driver
+							should for a csCode it doesn't support.
+							The guest can do this, so not abnormal.
+						*/
+#if ExtraAbnormalReports
 						ReportAbnormalID(0x0A04,
 							"kCmndVideoControl, unknown csCode");
+#endif
 #if dbglog_HAVE
 						dbglog_writelnNum("csCode", csCode);
 #endif
@@ -821,20 +853,47 @@ GLOBALPROC ExtnVideo_Access(CPTR p)
 							"Video_Access kCmndVideoStatus, "
 							"GetEntries");
 #endif
-						{
-#if 0
+#if (0 != vMacScreenDepth) && (vMacScreenDepth < 4)
+						if (UseColorMode) {
+							/* inverse of SetEntries */
 							CPTR csTable = get_vm_long(
 								csParam + VDSetEntryRecord_csTable);
-							put_vm_word(
-								csParam + VDSetEntryRecord_csStart,
-								csStart);
-							put_vm_word(
-								csParam + VDSetEntryRecord_csCount,
-								csCount);
-#endif
-							ReportAbnormalID(0x0A05,
-								"GetEntries not implemented");
+							ui4r csStart = get_vm_word(
+								csParam + VDSetEntryRecord_csStart);
+							ui4r csCount = 1 + get_vm_word(
+								csParam + VDSetEntryRecord_csCount);
+							int i;
+
+							if (((ui4r) 0xFFFF) == csStart) {
+								/* indices given in the value fields */
+								result = mnvm_noErr;
+								for (i = 0; i < csCount; ++i) {
+									ui4r j = get_vm_word(csTable + 0);
+									if (j >= CLUT_size) {
+										/* out of range */
+										result = mnvm_paramErr;
+									} else {
+										Vid_GetCLUTEntry(j, csTable);
+									}
+									csTable += 8;
+								}
+							} else
+							if ((ui5r)csStart + csCount > CLUT_size) {
+								result = mnvm_paramErr;
+							} else
+							{
+								for (i = 0; i < csCount; ++i) {
+									put_vm_word(csTable + 0,
+										i + csStart);
+									Vid_GetCLUTEntry(i + csStart,
+										csTable);
+									csTable += 8;
+								}
+								result = mnvm_noErr;
+							}
 						}
+#endif
+						/* otherwise return mnvm_statusErr */
 						break;
 					case 4: /* GetPages */
 #if VID_dolog
@@ -981,9 +1040,12 @@ GLOBALPROC ExtnVideo_Access(CPTR p)
 						/* seen in System 7.5.5 boot */
 						break;
 					default:
+						/* return mnvm_statusErr, as for 0x0A04 */
+#if ExtraAbnormalReports
 						ReportAbnormalID(0x0A06,
 							"Video_Access kCmndVideoStatus, "
 								"unknown csCode");
+#endif
 #if dbglog_HAVE
 						dbglog_writelnNum("csCode", csCode);
 #endif

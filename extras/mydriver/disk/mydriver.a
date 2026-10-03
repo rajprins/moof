@@ -182,9 +182,12 @@ RomBase EQU $00400000
 VBLTaskFreq EQU $0E19
 	; about once a minute, often enough that
 	; a problem with VBLTaskProc noticable.
+	; (3609 ticks.) Use it as an immediate, #VBLTaskFreq;
+	; without the # it was a word read from odd low
+	; memory address $0E19 (trap table bytes).
 
 VBLTaskProc
-	MOVE.W     VBLTaskFreq, $000A(A0)
+	MOVE.W     #VBLTaskFreq, $000A(A0)
 	; fall through to return
 
 NullTaskProc
@@ -258,7 +261,7 @@ DOpen
 	LEA        VBLTaskProc,A1
 	MOVE.W     #1,$0004(A0) ; task type
 	MOVE.L     A1,$0006(A0) ; task procedure
-	MOVE.W     VBLTaskFreq,$000A(A0)
+	MOVE.W     #VBLTaskFreq,$000A(A0)
 	DC.W       $A033 ; _VInstall
 
 	MOVE.L     A3,D0

@@ -658,7 +658,13 @@ GLOBALFUNC ui3b VIA1_ShiftOutData(void)
 	} else {
 		VIA1_SetInterruptFlag(kIntSR);
 		VIA1_SetInterruptFlag(kIntCB1);
-		VIA1_iCB2 = (VIA1_D.SR & 1);
+		/* CB2 is left holding the last bit shifted out */
+		if (VIA1_iCB2 != (VIA1_D.SR & 1)) {
+			VIA1_iCB2 = (VIA1_D.SR & 1);
+#ifdef VIA1_iCB2_ChangeNtfy
+			VIA1_iCB2_ChangeNtfy();
+#endif
+		}
 		return VIA1_D.SR;
 	}
 }
@@ -676,18 +682,46 @@ GLOBALPROC VIA1_DoTimer1Check(void)
 		iCountt deltaTime = (NewTime - VIA1_T1LastTime);
 		if (deltaTime != 0) {
 			ui5b Temp = VIA1_D.T1C_F; /* Get Timer 1 Counter */
+			ui5b deltaTicks = deltaTime / CyclesPerViaTime;
 			ui5b deltaTemp =
-				(deltaTime / CyclesPerViaTime) << (16 - kLn2CycleScale);
-					/* may overflow */
+				deltaTicks << (16 - kLn2CycleScale);
+					/*
+						may overflow, when deltaTime is
+						at least 0x00010000 * CyclesScaledPerViaTime.
+						It then wraps like the counter itself does,
+						so NewTemp is still right modulo 2^32.
+					*/
 			ui5b NewTemp = Temp - deltaTemp;
-			if ((deltaTime > (0x00010000UL * CyclesScaledPerViaTime))
+			if ((deltaTime >= (0x00010000UL * CyclesScaledPerViaTime))
 				|| ((Temp <= deltaTemp) && (Temp != 0)))
 			{
 				if ((VIA1_D.ACR & 0x40) != 0) { /* Free Running? */
 					/* Reload Counter from Latches */
 					ui4b v = (VIA1_D.T1L_H << 8) + VIA1_D.T1L_L;
-					ui4b ntrans = 1 + ((v == 0) ? 0 :
-						(((deltaTemp - Temp) / v) >> 16));
+					ui4b ntrans = 1;
+					if (v != 0) {
+						/*
+							Number of further reloads is
+							(deltaTemp - Temp) / (v << 16), computed
+							without forming deltaTemp, which may have
+							wrapped. In units of
+							1 << (16 - kLn2CycleScale) the period
+							is per, and Temp is TempHi plus a
+							fraction TempLo. ntrans may wrap, which
+							changes neither its parity nor NewTemp
+							((v << 32) is 0 modulo 2^32).
+						*/
+						ui5b per = (ui5b)v << kLn2CycleScale;
+						ui5b x = deltaTicks
+							- (Temp >> (16 - kLn2CycleScale));
+						ui5b q = x / per;
+						if ((0 == (x % per)) && (0 != (Temp
+							& ((1UL << (16 - kLn2CycleScale)) - 1))))
+						{
+							--q;
+						}
+						ntrans += (ui4b)q;
+					}
 					NewTemp += (((ui5b)v * ntrans) << 16);
 #if Ui3rTestBit(VIA1_ORB_CanOut, 7)
 					if ((VIA1_D.ACR & 0x80) != 0) { /* invert ? */
@@ -802,10 +836,15 @@ GLOBALPROC VIA1_DoTimer2Check(void)
 		ui5b Temp = VIA1_D.T2C_F; /* Get Timer 2 Counter */
 		iCountt deltaTime = (NewTime - VIA1_T2LastTime);
 		ui5b deltaTemp = (deltaTime / CyclesPerViaTime)
-			<< (16 - kLn2CycleScale); /* may overflow */
+			<< (16 - kLn2CycleScale);
+			/*
+				may overflow, but then wraps like the counter
+				itself, and the deltaTime test below catches
+				the expiry.
+			*/
 		ui5b NewTemp = Temp - deltaTemp;
 		if (VIA1_T2_Active == 1) {
-			if ((deltaTime > (0x00010000UL * CyclesScaledPerViaTime))
+			if ((deltaTime >= (0x00010000UL * CyclesScaledPerViaTime))
 				|| ((Temp <= deltaTemp) && (Temp != 0)))
 			{
 				VIA1_T2C_ShortTime = falseblnr;

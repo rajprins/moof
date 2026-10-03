@@ -517,8 +517,11 @@ LOCALVAR int ReadModem;
 #endif
 
 #if EmLocalTalk
-static int rx_data_offset = 0;
-	/* when data pending, this is used */
+LOCALVAR ui5r rx_data_offset = 0;
+	/*
+		when data pending, this is used.
+		unsigned, like LT_RxBuffSz which it is compared with.
+	*/
 #endif
 
 EXPORTFUNC blnr SCC_InterruptsEnabled(void)
