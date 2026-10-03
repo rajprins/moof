@@ -665,6 +665,18 @@ GLOBALPROC Sony_EjectDriveFromHost(tDrive Drive_No)
 }
 
 /*
+	Whether the guest has been told about the disk in this drive.
+	Once it has, the emulated Mac holds the volume open and expects
+	to be the one that ejects it, so the host interface asks before
+	pulling it out from under the guest. An image that is inserted
+	but not yet announced can be removed without the guest noticing.
+*/
+GLOBALFUNC blnr Sony_IsDriveMountedByGuest(tDrive Drive_No)
+{
+	return (Drive_No < NumDrives) && vSonyIsMounted(Drive_No);
+}
+
+/*
 	Called when the emulated machine is reset, from the host's Machine
 	menu or by the RESET instruction the Finder executes on Restart.
 

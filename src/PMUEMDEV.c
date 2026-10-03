@@ -163,10 +163,17 @@ LOCALPROC PmuCheckCommandOp(void)
 			/* kPMUtimeRead - read the time from the clock chip */
 			if (kPMUStateRecievedCommand == PMUState) {
 				if (0 == PMU_BuffL) {
-					PMU_BuffA[0] = 0;
-					PMU_BuffA[1] = 0;
-					PMU_BuffA[2] = 0;
-					PMU_BuffA[3] = 0;
+					/*
+						The clock follows the host, as the RTC's
+						does. The PMU sends the seconds since 1904
+						most significant byte first.
+					*/
+					ui5b secs = CurMacDateInSeconds;
+
+					PMU_BuffA[0] = (secs >> 24) & 0xFF;
+					PMU_BuffA[1] = (secs >> 16) & 0xFF;
+					PMU_BuffA[2] = (secs >> 8) & 0xFF;
+					PMU_BuffA[3] = secs & 0xFF;
 					PmuStartSendResult(0, 4);
 				} else {
 					ReportAbnormalID(0x0E06, "Unknown kPMUtimeRead op");
@@ -429,6 +436,53 @@ GLOBALPROC PmuToReady_ChangeNtfy(void)
 			}
 			break;
 	}
+}
+
+/*
+	Parameter RAM persistence. See the matching block in RTCEMDEV.c,
+	which exports the same names: a model has either an RTC or a PMU
+	holding its PRAM, so only one of the two is ever compiled in.
+
+	The PMU starts from all zeros, so the defaults need no
+	fingerprinting beyond their size, and this model has no time
+	zone in PRAM for the host to keep up to date.
+*/
+
+GLOBALFUNC ui5r EmPRAM_Size(void)
+{
+	return sizeof(PARAMRAM);
+}
+
+GLOBALFUNC ui5r EmPRAM_Model(void)
+{
+	return CurEmMd;
+}
+
+GLOBALFUNC ui5r EmPRAM_DefaultsId(void)
+{
+	return 0;
+}
+
+GLOBALPROC EmPRAM_Read(ui3p Buffer)
+{
+	int i;
+
+	for (i = 0; i < (int) sizeof(PARAMRAM); ++i) {
+		Buffer[i] = PARAMRAM[i];
+	}
+}
+
+GLOBALPROC EmPRAM_Write(ui3p Buffer)
+{
+	int i;
+
+	for (i = 0; i < (int) sizeof(PARAMRAM); ++i) {
+		PARAMRAM[i] = Buffer[i];
+	}
+}
+
+GLOBALPROC EmPRAM_TimeZoneChanged(void)
+{
 }
 
 GLOBALPROC PMU_DoTask(void)

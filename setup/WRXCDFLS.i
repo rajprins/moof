@@ -1056,8 +1056,22 @@ LOCALPROC WriteAPBXCDBuildSettings(void)
 		WriteAPBQuotedField("LIBRARY_SEARCH_PATHS", "");
 	}
 	if (ide_vers >= 2100) {
-		WriteDestFileLn("MACOSX_DEPLOYMENT_TARGET = "
-			"\"$(MACOSX_RECOMMENDED_DEPLOYMENT_TARGET)\";");
+		/*
+			An explicit floor rather than
+			$(MACOSX_RECOMMENDED_DEPLOYMENT_TARGET), which resolves
+			to whatever the build machine runs and so produced an
+			application that refused to start on anything older.
+
+			14.0 is the lowest release that has every API the
+			sources use: the frame driver takes its CADisplayLink
+			from NSScreen, which is new in macOS 14, and that is the
+			newest requirement. The SwiftUI in the Settings window
+			and About panel (formStyle(.grouped), foregroundStyle)
+			needs only macOS 13.
+
+			Must match LSMinimumSystemVersion in WRMPLIST.i.
+		*/
+		WriteDestFileLn("MACOSX_DEPLOYMENT_TARGET = 14.0;");
 	}
 
 	if (ide_vers >= 12100) {

@@ -278,34 +278,42 @@ final class MenuController: NSObject, NSMenuItemValidation {
 	}
 
 	@objc private func ejectDrive(_ sender: Any?) {
-		guard let item = sender as? NSMenuItem else { return }
+		guard let item = sender as? NSMenuItem,
+			let drive = item.representedObject as? DiskDriveBox
+		else { return }
 
-		bridge.eject(drive: item.tag)
+		DiskEjector.eject(drive.drive, from: nil)
 	}
 
 	// MARK: validation
 
+	/*
+		Read through the bridge, like everything else here, so that
+		this file never touches the C surface. refresh is cheap, and
+		only assigns what changed.
+	*/
 	func validateMenuItem(_ item: NSMenuItem) -> Bool {
+		bridge.refresh()
+
 		switch item.action {
 		case #selector(setSpeed(_:)):
-			item.state = (Int(MNVM_GetSpeedValue()) == item.tag)
-				? .on : .off
+			item.state = (bridge.speed.rawValue == item.tag) ? .on : .off
 			return true
 
 		case #selector(toggleStopped(_:)):
-			item.state = MNVM_GetSpeedStopped() ? .on : .off
+			item.state = bridge.isStopped ? .on : .off
 			return true
 
 		case #selector(toggleMagnify(_:)):
-			item.state = MNVM_GetMagnify() ? .on : .off
+			item.state = bridge.magnify ? .on : .off
 			return bridge.hasMagnify
 
 		case #selector(toggleRunInBackground(_:)):
-			item.state = MNVM_GetRunInBackground() ? .on : .off
+			item.state = bridge.runInBackground ? .on : .off
 			return true
 
 		case #selector(toggleAutoSlow(_:)):
-			item.state = MNVM_GetAutoSlow() ? .on : .off
+			item.state = bridge.autoSlow ? .on : .off
 			return true
 
 		case #selector(ejectDrive(_:)):
@@ -337,11 +345,93 @@ extension MenuController: NSMenuDelegate {
 		}
 
 		for drive in bridge.insertedDrives {
-			let item = NSMenuItem(title: "Disk \(drive + 1)",
+			let item = NSMenuItem(title: drive.title,
 				action: #selector(ejectDrive(_:)), keyEquivalent: "")
 			item.target = self
-			item.tag = drive
+			item.tag = drive.index
+			item.representedObject = DiskDriveBox(drive)
 			menu.addItem(item)
+		}
+	}
+}
+
+/*
+	Carries a DiskDrive in an NSMenuItem's representedObject, so the
+	action knows which image the user picked and not only which slot.
+*/
+private final class DiskDriveBox: NSObject {
+	let drive: DiskDrive
+
+	init(_ drive: DiskDrive) {
+		self.drive = drive
+	}
+}
+
+/*
+	Ejecting from the host, shared by the File menu and the Settings
+	window.
+
+	The host can always take an image out, safely as far as the
+	emulator is concerned, but the guest is not told: to the emulated
+	Mac it is a disk yanked from the drive, with whatever it had not
+	yet written lost, and System 6 or 7 then asks for it back. So
+	once the guest has mounted a disk, the user is asked first and
+	pointed at the proper way. A disk the guest has not mounted yet
+	is simply removed.
+*/
+enum DiskEjector {
+
+	/// Ejects `drive`, asking first if the guest has it mounted. With
+	/// a window the question is a sheet on it, otherwise app modal.
+	static func eject(_ drive: DiskDrive, from window: NSWindow?) {
+		let bridge = EmulatorBridge.shared
+
+		guard bridge.isMountedByGuest(drive: drive.index) else {
+			bridge.eject(drive: drive.index)
+			return
+		}
+
+		let alert = NSAlert()
+		alert.alertStyle = .warning
+		alert.messageText = "The emulated Mac is still using "
+			+ (drive.imageName.map { "“\($0)”" } ?? "this disk") + "."
+		alert.informativeText = "Eject it in the emulated Mac first, "
+			+ "by dragging its icon to the Trash or choosing Eject "
+			+ "from the Finder’s Special menu. Ejecting it here is "
+			+ "like pulling a disk out of a running Mac: changes not "
+			+ "yet written to it can be lost."
+
+		let ejectButton = alert.addButton(withTitle: "Eject Anyway")
+		ejectButton.hasDestructiveAction = true
+		let cancelButton = alert.addButton(withTitle: "Cancel")
+
+		/*
+			Return cancels rather than ejects, so that dismissing the
+			alert without reading it is the safe choice.
+		*/
+		ejectButton.keyEquivalent = ""
+		cancelButton.keyEquivalent = "\r"
+
+		let finish = { (response: NSApplication.ModalResponse) in
+			guard response == .alertFirstButtonReturn else { return }
+
+			/*
+				The emulator kept running while the question was up.
+				If the guest has ejected the disk meanwhile, or
+				another image now sits in the drive, the answer no
+				longer applies to it.
+			*/
+			guard bridge.currentDrive(drive.index) == drive else {
+				bridge.refresh()
+				return
+			}
+			bridge.eject(drive: drive.index)
+		}
+
+		if let window {
+			alert.beginSheetModal(for: window, completionHandler: finish)
+		} else {
+			finish(alert.runModal())
 		}
 	}
 }

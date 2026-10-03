@@ -389,6 +389,24 @@ void MNVM_PostEjectDrive(int driveNo)
 	}
 }
 
+IMPORTFUNC blnr Sony_IsDriveMountedByGuest(tDrive Drive_No);
+
+bool MNVM_GetDriveMountedByGuest(int driveNo)
+{
+	bool v = false;
+
+	if ((driveNo >= 0) && (driveNo < (int) NumDrives)) {
+		EmuLock_Acquire();
+		v = Sony_IsDriveMountedByGuest((tDrive) driveNo)
+			? true : false;
+		EmuLock_Release();
+	}
+
+	return v;
+}
+
+/* MNVM_CopyDriveName is with the drives, below DriveNames. */
+
 /*
 	Asks the emulator loop to leave, using the flag the loop already
 	checks rather than introducing a second mechanism. Called by
@@ -512,7 +530,8 @@ LOCALFUNC tMacErr NSStringToRomanPbuf(NSString *string, tPbuf *r)
 	const void *s = [d0 bytes];
 	NSUInteger L = [d0 length];
 
-	if (NULL == s) {
+	if ((NULL == s) || (L > (NSUInteger)(ui5b) -1)) {
+		/* a Pbuf's size is 32 bits */
 		v = mnvm_miscErr;
 	} else {
 		ui3p p = (ui3p)malloc(L);
@@ -523,9 +542,9 @@ LOCALFUNC tMacErr NSStringToRomanPbuf(NSString *string, tPbuf *r)
 			/* memcpy((char *)p, s, L); */
 			ui3b *p0 = (ui3b *)s;
 			ui3b *p1 = (ui3b *)p;
-			int i;
+			NSUInteger i;
 
-			for (i = L; --i >= 0; ) {
+			for (i = L; i > 0; --i) {
 				ui3b v = *p0++;
 				if (10 == v) {
 					v = 13;
@@ -533,7 +552,7 @@ LOCALFUNC tMacErr NSStringToRomanPbuf(NSString *string, tPbuf *r)
 				*p1++ = v;
 			}
 
-			v = PbufNewFromPtr(p, L, r);
+			v = PbufNewFromPtr(p, (ui5b) L, r);
 		}
 	}
 
@@ -933,6 +952,46 @@ GLOBALOSGLUFUNC tMacErr vSonyGetName(tDrive Drive_No, tPbuf *r)
 }
 #endif
 
+/*
+	Part of EMUCTLAP, kept here because DriveNames is defined just
+	above. Copies rather than handing out the NSString, both to keep
+	the interface plain C and because the drive may be ejected, and
+	the string released, as soon as the lock is let go.
+*/
+bool MNVM_CopyDriveName(int driveNo, char *buf, int bufSize)
+{
+	bool v = false;
+
+#if IncludeSonyGetName || IncludeSonyNew
+	if ((driveNo >= 0) && (driveNo < (int) NumDrives)
+		&& (nullpr != buf) && (bufSize > 0))
+	{
+		NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+
+		EmuLock_Acquire();
+		if (vSonyIsInserted((tDrive) driveNo)) {
+			NSString *filePath = DriveNames[driveNo];
+
+			if (nil != filePath) {
+				v = [[filePath lastPathComponent]
+					getCString: buf
+					maxLength: (NSUInteger) bufSize
+					encoding: NSUTF8StringEncoding] ? true : false;
+			}
+		}
+		EmuLock_Release();
+
+		[pool release];
+	}
+#else
+	(void) driveNo;
+	(void) buf;
+	(void) bufSize;
+#endif
+
+	return v;
+}
+
 LOCALFUNC blnr Sony_Insert0(FILE *refnum, blnr locked,
 	NSString *filePath)
 {
@@ -1002,7 +1061,7 @@ LOCALFUNC blnr Sony_Insert2(char *s)
 LOCALFUNC tMacErr LoadMacRomPath(NSString *RomPath)
 {
 	FILE *ROM_File;
-	int File_Size;
+	size_t File_Size;
 	tMacErr err = mnvm_fnfErr;
 	const char *path = [RomPath fileSystemRepresentation];
 
@@ -1902,9 +1961,9 @@ LOCALPROC UpdateLuminanceCopy(si4b top, si4b left,
 			for (i = 0; i < 256; ++i) {
 				for (k = 1 << (3 - vMacScreenDepth); --k >= 0; ) {
 					j = (i >> (k << vMacScreenDepth)) & (CLUT_size - 1);
-					*p4++ = (((long)CLUT_reds[j] & 0xFF00) << 16)
-						| (((long)CLUT_greens[j] & 0xFF00) << 8)
-						| ((long)CLUT_blues[j] & 0xFF00);
+					*p4++ = (((ui5b)CLUT_reds[j] & 0xFF00) << 16)
+						| (((ui5b)CLUT_greens[j] & 0xFF00) << 8)
+						| ((ui5b)CLUT_blues[j] & 0xFF00);
 				}
 			}
 			ColorTransValid = trueblnr;
@@ -2087,11 +2146,347 @@ LOCALPROC UpdateTrueEmulatedTime(void)
 
 LOCALVAR ui5b MyDateDelta;
 
+/* --- parameter RAM persistence --- */
+
+/*
+	The guest's parameter RAM is kept in a file between runs, so that
+	what is set in the Control Panel survives quitting. Without this
+	every launch started from the defaults RTC_Init builds.
+
+	The core exposes only a few calls for this, exported by whichever
+	of RTCEMDEV.c or PMUEMDEV.c holds the PRAM for the emulated
+	model; they are separate translation units, so declared here by
+	hand, as Sony_EjectDriveFromHost is below.
+
+	There is one file per emulated model, since the layouts differ,
+	in Application Support. It starts with a header naming the model
+	and size, and identifying the defaults of the build that wrote
+	it; a file that does not match in every respect is ignored and
+	the defaults are used, which is what happened before.
+
+	Nothing that comes from the host is restored from the file: the
+	clock is not part of the PRAM array at all, and the time zone and
+	LocalTalk node hint are rewritten by the core after a restore.
+*/
+
+IMPORTFUNC ui5r EmPRAM_Size(void);
+IMPORTFUNC ui5r EmPRAM_Model(void);
+IMPORTFUNC ui5r EmPRAM_DefaultsId(void);
+IMPORTPROC EmPRAM_Read(ui3p Buffer);
+IMPORTPROC EmPRAM_Write(ui3p Buffer);
+IMPORTPROC EmPRAM_TimeZoneChanged(void);
+
+#define kMyPRAMMaxSize 256
+#define kMyPRAMMagic 0x4D6F5052 /* 'MoPR' */
+#define kMyPRAMFormat 1
+#define kMyPRAMHeaderSize 20
+	/* magic, format, model, size, defaults id; big endian */
+
+LOCALVAR char *MyPRAMFilePath = nullpr;
+LOCALVAR char *MyPRAMTempPath = nullpr;
+
+/* What was read at launch, if the header was acceptable. */
+LOCALVAR blnr MyPRAMHaveFileDat = falseblnr;
+LOCALVAR ui5r MyPRAMFileDefaultsId;
+LOCALVAR ui3b MyPRAMFileDat[kMyPRAMMaxSize];
+
+/*
+	Set once the emulator has initialised its PRAM and the saved copy
+	has been applied. Until then there is nothing worth saving, and
+	the core must not be written to.
+*/
+LOCALVAR blnr MyPRAMActive = falseblnr;
+
+/* What the file holds now, to tell whether it needs rewriting. */
+LOCALVAR blnr MyPRAMFileCurrent = falseblnr;
+LOCALVAR ui3b MyPRAMFileShadow[kMyPRAMMaxSize];
+
+/*
+	Indexed by the kEmMd_ values in GLOBGLUE.h, which this
+	translation unit cannot see.
+*/
+LOCALVAR const char *MyPRAMModelNames[] = {
+	"MacTwig43", "MacTwiggy", "Mac128K", "Mac512Ke", "MacKanji",
+	"MacPlus", "MacSE", "MacSEFDHD", "MacClassic", "MacPB100",
+	"MacII", "MacIIx"
+};
+
+LOCALFUNC char *MyCStrCopy(const char *s)
+{
+	size_t n = strlen(s) + 1;
+	char *p = (char *)malloc(n);
+
+	if (nullpr != p) {
+		memcpy(p, s, n);
+	}
+
+	return p;
+}
+
+/*
+	Called on the main thread while starting up, before the emulator
+	thread exists. Reads the file now so that the emulator thread
+	never has to touch Foundation for it.
+*/
+LOCALPROC MyPRAM_Init(void)
+{
+	ui5r model = EmPRAM_Model();
+	ui5r size = EmPRAM_Size();
+	NSString *name;
+	NSURL *dirURL;
+	NSString *path;
+	FILE *f;
+
+	if (size > kMyPRAMMaxSize) {
+		return;
+	}
+
+	dirURL = [[NSFileManager defaultManager]
+		URLForDirectory: NSApplicationSupportDirectory
+		inDomain: NSUserDomainMask
+		appropriateForURL: nil
+		create: YES
+		error: NULL];
+	if (nil == dirURL) {
+		return;
+	}
+	dirURL = [dirURL URLByAppendingPathComponent: @kStrAppName
+		isDirectory: YES];
+	if (! [[NSFileManager defaultManager]
+		createDirectoryAtURL: dirURL
+		withIntermediateDirectories: YES
+		attributes: nil
+		error: NULL])
+	{
+		return;
+	}
+
+	if (model < sizeof(MyPRAMModelNames) / sizeof(char *)) {
+		name = [NSString stringWithFormat: @"%s.pram",
+			MyPRAMModelNames[model]];
+	} else {
+		name = [NSString stringWithFormat: @"Model%u.pram",
+			(unsigned) model];
+	}
+	path = [[dirURL URLByAppendingPathComponent: name
+		isDirectory: NO] path];
+
+	MyPRAMFilePath = MyCStrCopy([path fileSystemRepresentation]);
+	/*
+		Named per process, so two copies of the application running
+		the same model cannot write into each other's temporary
+		file. Between them the last to save wins, which is the best
+		a single file can do.
+	*/
+	MyPRAMTempPath = MyCStrCopy([[path
+		stringByAppendingFormat: @".%d.tmp", (int) getpid()]
+		fileSystemRepresentation]);
+	if ((nullpr == MyPRAMFilePath) || (nullpr == MyPRAMTempPath)) {
+		return;
+	}
+
+	f = fopen(MyPRAMFilePath, "rb");
+	if (NULL != f) {
+		ui3b header[kMyPRAMHeaderSize];
+
+		if ((kMyPRAMHeaderSize
+				== fread(header, 1, kMyPRAMHeaderSize, f))
+			&& (size == fread(MyPRAMFileDat, 1, size, f))
+			&& (EOF == fgetc(f))
+			&& (kMyPRAMMagic == do_get_mem_long(&header[0]))
+			&& (kMyPRAMFormat == do_get_mem_long(&header[4]))
+			&& (model == do_get_mem_long(&header[8]))
+			&& (size == do_get_mem_long(&header[12])))
+		{
+			MyPRAMFileDefaultsId = do_get_mem_long(&header[16]);
+			MyPRAMHaveFileDat = trueblnr;
+		}
+		fclose(f);
+	}
+}
+
+/*
+	Writes to a temporary file and renames it over the old one, so a
+	crash part way through leaves the previous copy rather than a
+	truncated one.
+*/
+LOCALFUNC blnr MyPRAM_WriteFile(ui3p Dat)
+{
+	ui3b header[kMyPRAMHeaderSize];
+	ui5r size = EmPRAM_Size();
+	FILE *f;
+	blnr IsOk = falseblnr;
+
+	if ((nullpr == MyPRAMFilePath) || (nullpr == MyPRAMTempPath)) {
+		return falseblnr;
+	}
+
+	do_put_mem_long(&header[0], kMyPRAMMagic);
+	do_put_mem_long(&header[4], kMyPRAMFormat);
+	do_put_mem_long(&header[8], EmPRAM_Model());
+	do_put_mem_long(&header[12], size);
+	do_put_mem_long(&header[16], EmPRAM_DefaultsId());
+
+	f = fopen(MyPRAMTempPath, "wb");
+	if (NULL != f) {
+		if ((kMyPRAMHeaderSize
+				== fwrite(header, 1, kMyPRAMHeaderSize, f))
+			&& (size == fwrite(Dat, 1, size, f)))
+		{
+			IsOk = trueblnr;
+		}
+		if (0 != fclose(f)) {
+			IsOk = falseblnr;
+		}
+		if (IsOk) {
+			IsOk = (0 == rename(MyPRAMTempPath, MyPRAMFilePath));
+		} else {
+			(void) remove(MyPRAMTempPath);
+		}
+	}
+
+	return IsOk;
+}
+
+/*
+	Saves the PRAM if it differs from what the file holds. Cheap when
+	nothing changed: one small copy and compare. Called once a second
+	on the emulator thread, so a crash loses at most a second of
+	changes, and once more at shutdown. Plain stdio from the
+	emulator thread is fine here; it never runs on the audio thread.
+*/
+LOCALPROC MyPRAM_SaveIfChanged(void)
+{
+	ui3b Dat[kMyPRAMMaxSize];
+	ui5r size = EmPRAM_Size();
+
+	if ((! MyPRAMActive) || (nullpr == MyPRAMFilePath)) {
+		return;
+	}
+
+	EmPRAM_Read(Dat);
+	if ((! MyPRAMFileCurrent)
+		|| (0 != memcmp(Dat, MyPRAMFileShadow, size)))
+	{
+		if (MyPRAM_WriteFile(Dat)) {
+			memcpy(MyPRAMFileShadow, Dat, size);
+			MyPRAMFileCurrent = trueblnr;
+		}
+	}
+}
+
+/*
+	Applies the saved PRAM. Must run after RTC_Init has built the
+	defaults, which replaces anything written earlier, and before the
+	guest executes its first instruction, which reads PRAM almost at
+	once. CheckDateTime is the hook for that: WaitForNextTick calls
+	it on the emulator thread before every batch of ticks, the first
+	time just after InitEmulation returns.
+*/
+LOCALPROC MyPRAM_Restore(void)
+{
+	ui5r size = EmPRAM_Size();
+
+	if (MyPRAMHaveFileDat
+		&& (EmPRAM_DefaultsId() == MyPRAMFileDefaultsId))
+	{
+		EmPRAM_Write(MyPRAMFileDat);
+		memcpy(MyPRAMFileShadow, MyPRAMFileDat, size);
+		MyPRAMFileCurrent = trueblnr;
+	}
+
+	MyPRAMActive = trueblnr;
+}
+
+LOCALPROC MyPRAM_UnInit(void)
+{
+	MyPRAM_SaveIfChanged();
+	MyPRAMActive = falseblnr;
+
+	if (nullpr != MyPRAMFilePath) {
+		free(MyPRAMFilePath);
+		MyPRAMFilePath = nullpr;
+	}
+	if (nullpr != MyPRAMTempPath) {
+		free(MyPRAMTempPath);
+		MyPRAMTempPath = nullpr;
+	}
+}
+
+/* --- date and time zone --- */
+
+/*
+	The host time zone is not fixed for the life of the process: it
+	changes twice a year for daylight saving, and whenever the user
+	travels or picks another zone. Both have to reach the guest, or
+	its clock ends up an hour out until the next launch.
+
+	A change of zone is announced, by
+	NSSystemTimeZoneDidChangeNotification on the main thread, which
+	sets this flag. A daylight saving transition is not announced at
+	all, so the offset is also rechecked once a minute.
+*/
+LOCALVAR blnr MyTimeZoneCheckWanted = falseblnr;
+LOCALVAR ui5b MyTimeZoneCheckMinute = 0;
+LOCALVAR id MyTimeZoneObserver = nil;
+
+LOCALPROC MySetTimeZoneDat(void)
+{
+	NSTimeZone *MyZone = [NSTimeZone localTimeZone];
+	ui5b TzOffSet = (ui5b)[MyZone secondsFromGMT];
+
+	/* seconds from 1904 to 2001, the NSDate reference date */
+	MyDateDelta = TzOffSet - 1233815296;
+
+#if AutoTimeZone
+	CurMacDelta = (TzOffSet & 0x00FFFFFF)
+		| (([MyZone isDaylightSavingTime] ? 0x80 : 0) << 24);
+#endif
+}
+
+/*
+	Runs with the emulator lock held, on whichever thread is running
+	WaitForNextTick.
+*/
+LOCALPROC MyCheckTimeZone(void)
+{
+	ui5b OldDateDelta = MyDateDelta;
+#if AutoTimeZone
+	ui5b OldMacDelta = CurMacDelta;
+#endif
+
+	MySetTimeZoneDat();
+
+	if ((OldDateDelta != MyDateDelta)
+#if AutoTimeZone
+		|| (OldMacDelta != CurMacDelta)
+#endif
+		)
+	{
+		if (MyPRAMActive) {
+			EmPRAM_TimeZoneChanged();
+		}
+	}
+}
+
 LOCALFUNC blnr CheckDateTime(void)
 {
+	ui5b NewMinute = ((ui5b)LatestTime) / 60;
+
+	if ((! MyPRAMActive) && EmuThread_IsCurrent()) {
+		MyPRAM_Restore();
+	}
+
+	if (MyTimeZoneCheckWanted || (NewMinute != MyTimeZoneCheckMinute)) {
+		MyTimeZoneCheckWanted = falseblnr;
+		MyTimeZoneCheckMinute = NewMinute;
+		MyCheckTimeZone();
+	}
+
 	NewMacDateInSeconds = ((ui5b)LatestTime) + MyDateDelta;
 	if (CurMacDateInSeconds != NewMacDateInSeconds) {
 		CurMacDateInSeconds = NewMacDateInSeconds;
+		MyPRAM_SaveIfChanged();
 		return trueblnr;
 	} else {
 		return falseblnr;
@@ -2106,22 +2501,55 @@ LOCALPROC StartUpTimeAdjust(void)
 
 LOCALFUNC blnr InitLocationDat(void)
 {
-	NSTimeZone *MyZone = [NSTimeZone localTimeZone];
-	ui5b TzOffSet = (ui5b)[MyZone secondsFromGMT];
-#if AutoTimeZone
-	BOOL isdst = [MyZone isDaylightSavingTime];
-#endif
+	/*
+		CurMacLatitude and CurMacLongitude stay 0. macOS gives no
+		coordinates without Core Location, which would mean asking
+		for location permission just to fill in the Map control
+		panel, so the guest's default location is left alone.
+	*/
 
-	MyDateDelta = TzOffSet - 1233815296;
+	MySetTimeZoneDat();
 	LatestTime = [NSDate timeIntervalSinceReferenceDate];
+	MyTimeZoneCheckMinute = ((ui5b)LatestTime) / 60;
 	NewMacDateInSeconds = ((ui5b)LatestTime) + MyDateDelta;
 	CurMacDateInSeconds = NewMacDateInSeconds;
-#if AutoTimeZone
-	CurMacDelta = (TzOffSet & 0x00FFFFFF)
-		| ((isdst ? 0x80 : 0) << 24);
-#endif
+
+	/*
+		NSTimeZone caches the system zone, so the cache is dropped
+		before the emulator thread is asked to look again.
+	*/
+	MyTimeZoneObserver = [[[NSNotificationCenter defaultCenter]
+		addObserverForName: NSSystemTimeZoneDidChangeNotification
+		object: nil
+		queue: [NSOperationQueue mainQueue]
+		usingBlock: ^(NSNotification *note) {
+			(void) note;
+			EmuLock_Acquire();
+			[NSTimeZone resetSystemTimeZone];
+			MyTimeZoneCheckWanted = trueblnr;
+			EmuLock_Release();
+		}] retain];
+
+	MyPRAM_Init();
 
 	return trueblnr;
+}
+
+/*
+	The one teardown call for this section, from UnInitOSGLU, after
+	the emulator thread has stopped: saves the PRAM a last time and
+	stops listening for zone changes.
+*/
+LOCALPROC UnInitLocationDat(void)
+{
+	MyPRAM_UnInit();
+
+	if (nil != MyTimeZoneObserver) {
+		[[NSNotificationCenter defaultCenter]
+			removeObserver: MyTimeZoneObserver];
+		[MyTimeZoneObserver release];
+		MyTimeZoneObserver = nil;
+	}
 }
 
 /* --- sound --- */
@@ -3194,9 +3622,9 @@ LOCALPROC InsertADisk0(void)
 	MyBeginDialog();
 
 	if (NSModalResponseOK == [panel runModal]) {
-		int i;
+		NSUInteger i;
 		NSArray *a = [panel URLs];
-		int n = [a count];
+		NSUInteger n = [a count];
 
 		for (i = 0; i < n; ++i) {
 			NSURL *fileURL = [a objectAtIndex: i];
@@ -3398,21 +3826,28 @@ label_exit:
 			[sender draggingSourceOperationMask];
 	*/
 
-	if ([[pboard types] containsObject:NSFilenamesPboardType]) {
-		int i;
-		NSArray *file_names =
-			[pboard propertyListForType: NSFilenamesPboardType];
-		int n = [file_names count];
+	/*
+		One pasteboard item per dropped file, each a file URL. This
+		replaces the single NSFilenamesPboardType property list, and
+		the NSURLPboardType fallback, both deprecated since 10.14.
+		Restricting the read to file URLs keeps web links out, as the
+		old fallback did by way of [fileURL path]. Aliases are still
+		resolved by Sony_ResolveInsert, since a file URL to an alias
+		file names the alias, not its target.
+	*/
+	NSArray *fileURLs = [pboard
+		readObjectsForClasses: [NSArray arrayWithObject: [NSURL class]]
+		options: [NSDictionary
+			dictionaryWithObject: [NSNumber numberWithBool: YES]
+			forKey: NSPasteboardURLReadingFileURLsOnlyKey]];
+	NSUInteger i;
+	NSUInteger n = [fileURLs count];
 
-		for (i = 0; i < n; ++i) {
-			NSString *filePath = [file_names objectAtIndex:i];
-			Sony_ResolveInsert(filePath);
-		}
-		v = YES;
-	} else if ([[pboard types] containsObject: NSURLPboardType]) {
-		NSURL *fileURL = [NSURL URLFromPasteboard: pboard];
-		NSString* filePath = [fileURL path];
-		Sony_ResolveInsert(filePath);
+	for (i = 0; i < n; ++i) {
+		NSURL *fileURL = [fileURLs objectAtIndex: i];
+		Sony_ResolveInsert([fileURL path]);
+	}
+	if (n > 0) {
 		v = YES;
 	}
 
@@ -3607,9 +4042,9 @@ LOCALFUNC blnr CreateMainWindow(void)
 	MainScrnBounds = [[NSScreen mainScreen] frame];
 	SavedScrnBounds = MainScrnBounds;
 	{
-		int i;
+		NSUInteger i;
 		NSArray *screens = [NSScreen screens];
-		int n = [screens count];
+		NSUInteger n = [screens count];
 
 		AllScrnBounds = MainScrnBounds;
 		for (i = 0; i < n; ++i) {
@@ -3748,8 +4183,7 @@ LOCALFUNC blnr CreateMainWindow(void)
 	[MyWindow setViewsNeedDisplay: NO];
 
 	[MyWindow registerForDraggedTypes:
-		[NSArray arrayWithObjects:
-			NSURLPboardType, NSFilenamesPboardType, nil]];
+		[NSArray arrayWithObject: NSPasteboardTypeFileURL]];
 
 	MyWinDelegate = [[MyClassWindowDelegate alloc] init];
 	if (nil == MyWinDelegate) {
@@ -4333,7 +4767,22 @@ LOCALPROC CheckForSavedTasks(void)
 		If move mouse to dock then cursor is made visible, but then
 		if move directly to our window, cursor is not hidden again.
 	*/
-	/* deprecated in cocoa, but no alternative (?) */
+	/*
+		CGCursorIsVisible has been deprecated since 10.9 with no
+		replacement, and is kept deliberately. Nothing else reports
+		whether the cursor is actually showing: NSCursor only
+		counts hide and unhide calls, and that count is exactly what
+		the Dock gets out of step with. The alternative would be to
+		stop hiding the cursor and instead give the view a blank
+		cursor through cursor rects, which AppKit reapplies on every
+		entry. That reworks how the cursor is hidden in full screen
+		and while grabbing the mouse, and cannot be checked without
+		driving the real pointer over the Dock, so it is left for a
+		change that can be tested that way. The function still
+		works, so only the warning is silenced, here alone.
+	*/
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
 	if (CGCursorIsVisible()) {
 		if (HaveCursorHidden) {
 			MyHideCursor();
@@ -4354,6 +4803,7 @@ LOCALPROC CheckForSavedTasks(void)
 			*/
 		}
 	}
+#pragma clang diagnostic pop
 #endif
 }
 
@@ -4778,19 +5228,39 @@ LOCALFUNC blnr setupWorkingDirectory(void)
 	}
 
 	/*
-		Ask, rather than force. RequestMacOff is what the close box
-		uses: CheckForSavedTasks quits at once when no disk image is
-		mounted, and otherwise warns that the emulated computer
+		Ask, rather than force: quit at once when no disk image is
+		inserted, and otherwise warn that the emulated computer
 		should be shut down first. Forcing here skipped that warning
 		and risked corrupting mounted images. Without a ROM there is
 		no emulated computer to shut down, so that case still quits
 		straight away.
+
+		This is what CheckForSavedTasks does for RequestMacOff, done
+		here directly rather than by setting that flag. The flag is
+		only noticed when the display link next fires, and a quit
+		request often arrives while the application is in the
+		background, which is exactly when the system may be
+		throttling it: an Apple Event wakes the application long
+		enough to run this, and then nothing ran CheckForSavedTasks,
+		so the warning did not appear until something else -- such
+		as a second quit request -- woke it again. The alert itself
+		is still presented on a later turn of the run loop by
+		CheckSavedMacMsg, which a dispatched block guarantees
+		regardless of the display link, and which also keeps a
+		modal session out of the Apple Event handler.
+
+		A message already on screen or waiting to be shown is left
+		alone, so repeating the request does not stack up copies of
+		the warning.
 	*/
 	EmuLock_Acquire();
-	if (ROM_loaded) {
-		RequestMacOff = trueblnr;
-	} else {
+	if (! ROM_loaded) {
 		(void) EmuThread_RequestStop();
+	} else if (! AnyDiskInserted()) {
+		ForceMacOff = trueblnr;
+	} else if ((nullpr == SavedBriefMsg) && ! PresentingMacMsg) {
+		MacMsgOverride(kStrQuitWarningTitle, kStrQuitWarningMessage);
+		CheckSavedMacMsg(trueblnr);
 	}
 	EmuLock_Release();
 
@@ -5067,6 +5537,7 @@ LOCALPROC UnInitOSGLU(void)
 	UnInitPbufs();
 #endif
 	UnInitDrives();
+	UnInitLocationDat();
 
 	ForceShowCursor();
 

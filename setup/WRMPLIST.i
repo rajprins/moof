@@ -234,7 +234,11 @@ LOCALPROC WriteMyInfoPListContents(void)
 		WritePListKeyProcString("CFBundleSignature",
 			Write_MacCreatorSigOrGeneric);
 		WritePListKeyProcString("CFBundleVersion", WriteVersionStr);
-		WritePListKeyString("LSMinimumSystemVersion", "10.15");
+		/*
+			Must match MACOSX_DEPLOYMENT_TARGET in WRXCDFLS.i,
+			which explains why it is 14.0.
+		*/
+		WritePListKeyString("LSMinimumSystemVersion", "14.0");
 		WritePListKeyString("NSHighResolutionCapable", "1");
 		if (WantGraphicsSwitching) {
 			WritePListKeyString("NSSupportsAutomaticGraphicsSwitching",

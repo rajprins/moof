@@ -103,6 +103,21 @@ extern bool MNVM_GetDriveInserted(int driveNo);
 extern bool MNVM_GetAnyDriveInserted(void);
 extern void MNVM_PostEjectDrive(int driveNo);
 
+/*
+	Whether the guest has been told about the disk in a drive and so
+	considers it mounted. Ejecting such a disk from the host is like
+	pulling a floppy out from under the emulated Mac, so the
+	interface asks first.
+*/
+extern bool MNVM_GetDriveMountedByGuest(int driveNo);
+
+/*
+	Copies the file name of the image in a drive, as UTF-8, into buf.
+	Returns false, leaving buf unspecified, if the drive is empty,
+	its name is unknown or it does not fit in bufSize bytes.
+*/
+extern bool MNVM_CopyDriveName(int driveNo, char *buf, int bufSize);
+
 #ifdef __cplusplus
 }
 #endif

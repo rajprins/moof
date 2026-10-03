@@ -26,3 +26,10 @@ EXPORTPROC RTC_Interrupt(void);
 EXPORTPROC RTCunEnabled_ChangeNtfy(void);
 EXPORTPROC RTCclock_ChangeNtfy(void);
 EXPORTPROC RTCdataLine_ChangeNtfy(void);
+
+EXPORTFUNC ui5r EmPRAM_Size(void);
+EXPORTFUNC ui5r EmPRAM_Model(void);
+EXPORTFUNC ui5r EmPRAM_DefaultsId(void);
+EXPORTPROC EmPRAM_Read(ui3p Buffer);
+EXPORTPROC EmPRAM_Write(ui3p Buffer);
+EXPORTPROC EmPRAM_TimeZoneChanged(void);

@@ -33,6 +33,7 @@
 
 import SwiftUI
 import AppKit
+import Combine
 
 struct SettingsView: View {
 
@@ -77,12 +78,20 @@ struct SettingsView: View {
 					Text("No disks inserted")
 						.foregroundStyle(.secondary)
 				} else {
-					ForEach(bridge.insertedDrives, id: \.self) { drive in
+					ForEach(bridge.insertedDrives) { drive in
 						HStack {
-							Text("Disk \(drive + 1)")
+							Text(drive.title)
+								.lineLimit(1)
+								.truncationMode(.middle)
 							Spacer()
 							Button("Eject") {
-								bridge.eject(drive: drive)
+								/*
+									The Settings window is key while
+									its button is clicked, so the
+									question appears as a sheet on it.
+								*/
+								DiskEjector.eject(drive,
+									from: NSApp.keyWindow)
 							}
 						}
 					}

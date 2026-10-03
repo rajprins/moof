@@ -59,6 +59,25 @@ enum EmulatorSpeed: Int, CaseIterable, Identifiable {
 	}
 }
 
+/// A drive holding a disk image, as offered in the interface.
+struct DiskDrive: Identifiable, Equatable {
+	/// Zero based drive index.
+	let index: Int
+
+	/// File name of the image, if the emulator knows it.
+	let imageName: String?
+
+	var id: Int { index }
+
+	/// "Disk 1 — System.dsk", or just "Disk 1".
+	var title: String {
+		if let imageName {
+			return "Disk \(index + 1) — \(imageName)"
+		}
+		return "Disk \(index + 1)"
+	}
+}
+
 final class EmulatorBridge: ObservableObject {
 
 	static let shared = EmulatorBridge()
@@ -118,8 +137,8 @@ final class EmulatorBridge: ObservableObject {
 		}
 	}
 
-	/// Which drives currently hold an image.
-	@Published var insertedDrives: [Int] = []
+	/// The drives that currently hold an image.
+	@Published var insertedDrives: [DiskDrive] = []
 
 	/*
 		Guards the didSet observers while state is being pulled back
@@ -137,16 +156,47 @@ final class EmulatorBridge: ObservableObject {
 		isRefreshing = true
 		defer { isRefreshing = false }
 
-		speed = EmulatorSpeed(rawValue: Int(MNVM_GetSpeedValue())) ?? .x1
-		isStopped = MNVM_GetSpeedStopped()
-		magnify = MNVM_GetMagnify()
-		fullScreen = MNVM_GetFullScreen()
-		runInBackground = MNVM_GetRunInBackground()
-		autoSlow = MNVM_GetAutoSlow()
+		/*
+			Assigned only when different. Every assignment to a
+			published property announces a change, and the Settings
+			window refreshes twice a second, so writing unchanged
+			values would redraw it for nothing.
+		*/
+		update(\.speed,
+			EmulatorSpeed(rawValue: Int(MNVM_GetSpeedValue())) ?? .x1)
+		update(\.isStopped, MNVM_GetSpeedStopped())
+		update(\.magnify, MNVM_GetMagnify())
+		update(\.fullScreen, MNVM_GetFullScreen())
+		update(\.runInBackground, MNVM_GetRunInBackground())
+		update(\.autoSlow, MNVM_GetAutoSlow())
 
-		insertedDrives = (0 ..< driveCount).filter {
+		update(\.insertedDrives, (0 ..< driveCount).compactMap {
 			MNVM_GetDriveInserted(Int32($0))
+				? DiskDrive(index: $0, imageName: imageName(drive: $0))
+				: nil
+		})
+	}
+
+	private func update<T: Equatable>(
+		_ property: ReferenceWritableKeyPath<EmulatorBridge, T>,
+		_ value: T)
+	{
+		if self[keyPath: property] != value {
+			self[keyPath: property] = value
 		}
+	}
+
+	private func imageName(drive: Int) -> String? {
+		/*
+			Generous for a file name, which macOS limits to 255
+			UTF-16 units, up to three UTF-8 bytes each.
+		*/
+		var buffer = [CChar](repeating: 0, count: 1024)
+
+		guard MNVM_CopyDriveName(Int32(drive), &buffer,
+			Int32(buffer.count)) else { return nil }
+
+		return String(cString: buffer)
 	}
 
 	var anyDriveInserted: Bool { MNVM_GetAnyDriveInserted() }
@@ -157,6 +207,19 @@ final class EmulatorBridge: ObservableObject {
 	func interrupt() { MNVM_PostInterrupt() }
 	func insertDisk() { MNVM_PostInsertDisk() }
 	func requestQuit() { MNVM_PostQuit() }
+
+	/// Whether the guest has mounted the disk, and so expects to be
+	/// the one to eject it.
+	func isMountedByGuest(drive: Int) -> Bool {
+		MNVM_GetDriveMountedByGuest(Int32(drive))
+	}
+
+	/// The image a drive holds now, which may differ from what was
+	/// shown to the user a moment ago.
+	func currentDrive(_ drive: Int) -> DiskDrive? {
+		guard MNVM_GetDriveInserted(Int32(drive)) else { return nil }
+		return DiskDrive(index: drive, imageName: imageName(drive: drive))
+	}
 
 	func eject(drive: Int) {
 		MNVM_PostEjectDrive(Int32(drive))
