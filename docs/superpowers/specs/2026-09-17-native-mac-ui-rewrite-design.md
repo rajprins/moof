@@ -414,7 +414,7 @@ thread, which `MySound_Init` creates through
 
 | Site | State |
 |---|---|
-| `ASCEMDEV.c:763`, `:774` in `ASC_SubTick` | emulated Apple Sound Chip |
+| `ASCEMDEV.c:763`, `:774` in `ASC_SubTick` | samples written into `TheSoundBuffer` |
 | `OSGLUCCO.m:1949` in `MySound_WroteABlock` | `TheFillOffset` |
 | `OSGLUCCO.m:1985`, `:2004` in `MySound_SecondNotify0` | `MinFilledSoundBuffs` |
 | `OSGLUCCO.m:2229` in `MySound_Stop` | `cur_audio` |
@@ -422,9 +422,28 @@ thread, which `MySound_Init` creates through
 These are pre-existing: the sound code has never had any
 synchronisation, and before the thread move the same races existed
 between the main thread and the render thread. The thread move
-relocated one end without creating them. Two of them are in the
-emulator core, so the audio callback is reaching into emulated device
-state directly.
+relocated one end without creating them.
+
+Correction to an earlier reading of this table: the two `ASCEMDEV.c`
+sites are not the render thread reaching into emulated device state.
+Both are `*p++ = …` through the pointer `MySound_BeginWrite` returned,
+so they are stores into the host's sample ring, `TheSoundBuffer`. The
+render thread never touches ASC registers. Every race above is
+therefore on the ring and its `volatile` offsets, and `volatile`
+orders nothing between threads. The `SNDEMDEV.c` and ASC FIFO mode
+stores are the same race and were simply not exercised in this run.
+
+There is also a logic race, not only an ordering one: on overflow
+`MySound_BeginWrite` rewinds `TheWriteOffset` by a block, rewriting
+one already published to the render thread.
+
+Both are fixable entirely in the host, at `MySound_BeginWrite` and
+`MySound_EndWrite`, with no change to the core, which only ever writes
+inside the span it is handed: publish the fill offset with release
+ordering and load it with acquire in the callback, the same in reverse
+for the play offset, divert overflow into a scratch span instead of
+rewinding, update `MinFilledSoundBuffs` with an atomic minimum and
+exchange, and make `wantplaying` and `lastv` atomic.
 
 **The coarse emulator lock does not and must not cover this.** A
 realtime audio render thread that blocks on a lock held by the

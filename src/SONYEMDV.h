@@ -27,6 +27,7 @@ EXPORTPROC ExtnSony_Access(CPTR p);
 
 EXPORTPROC Sony_SetQuitOnEject(void);
 
+EXPORTPROC Sony_EjectDriveFromHost(tDrive Drive_No);
 EXPORTPROC Sony_EjectAllDisks(void);
 EXPORTPROC Sony_Reset(void);
 

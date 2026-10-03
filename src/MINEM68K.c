@@ -7215,8 +7215,8 @@ LOCALPROC DoCAS2(void)
 					put_word(rn1, m68k_dreg(du1));
 					put_word(rn2, m68k_dreg(du2));
 				} else {
-					put_word(rn1, m68k_dreg(du1));
-					put_word(rn2, m68k_dreg(du2));
+					put_long(rn1, m68k_dreg(du1));
+					put_long(rn2, m68k_dreg(du2));
 				}
 			}
 		}

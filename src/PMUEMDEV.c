@@ -381,11 +381,12 @@ GLOBALPROC PmuToReady_ChangeNtfy(void)
 					/* mini vmac bug if ever happens */
 					ReportAbnormalID(0x0E0D,
 						"PMU_p null while kPMUStateRecievingBuffer");
+				} else {
+					*PMU_p++ = v;
+					--PMU_rem;
+					++PMU_i;
+					PmuCheckCommandCompletion();
 				}
-				*PMU_p++ = v;
-				--PMU_rem;
-				++PMU_i;
-				PmuCheckCommandCompletion();
 				PmuFromReady = 1;
 			}
 			break;

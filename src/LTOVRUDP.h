@@ -432,7 +432,14 @@ GLOBALOSGLUPROC LT_ReceivePacket(void)
 label_retry:
 #endif
 	bytes = GetNextPacket();
-	if (bytes > 0) {
+	/*
+		The datagram comes from the network, so its size is untrusted.
+		It must hold the 4 byte stamp and at least the 3 byte LLAP
+		header (destination, source, type) that the SCC reads
+		unconditionally. Anything shorter would make bytes - 4 wrap
+		LT_RxBuffSz, which is unsigned, to about 4 GiB.
+	*/
+	if (bytes >= 4 + 3) {
 #if LT_MayHaveEcho
 		CertainlyNotMyPacket = ! pidInPacketIsMine();
 #endif

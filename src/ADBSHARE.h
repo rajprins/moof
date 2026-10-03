@@ -244,7 +244,7 @@ LOCALFUNC blnr CheckForADBanyEvt(void)
 		}
 	}
 
-	return (0 != MouseADBDeltaH) && (0 != MouseADBDeltaV);
+	return (0 != MouseADBDeltaH) || (0 != MouseADBDeltaV);
 }
 
 LOCALPROC ADB_DoTalk(void)

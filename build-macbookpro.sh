@@ -4,9 +4,7 @@
 # https://minivmac.github.io/gryphel-mirror/c/minivmac/options.html
 
 # Native resolution: 3456 x 2234
-# Scaled 1728 X 1117
-
-864 558
+# Scaled 1728 X 1117, halved again to 864 x 558
 
 # Clean all old/generated files
 rm -rf ./bld

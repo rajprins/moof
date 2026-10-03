@@ -36,7 +36,7 @@ echo "Running setup tool to generate makefile generator..."
         -sss 4 \
         -sony-sum 1 \
         -sony-tag 1 \
-        -speed 4 \
+        -speed 1 \
         -ta 2 \
         -em-cpu 2 \
         -mem 1M \

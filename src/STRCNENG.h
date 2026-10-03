@@ -45,7 +45,7 @@
 #define kStrUnsupportedROMMessage "The ROM image file ;[^r;{ loaded successfully, but I don;}t support this ROM version."
 
 #define kStrQuitWarningTitle "Please shut down the emulated computer before quitting."
-#define kStrQuitWarningMessage "To force ^p to quit, at the risk of corrupting the mounted disk image files, use the ;]Q;} command of the ^p Control Mode. To learn about the Control Mode, see the ;[More Commands;ll;{ item in the ;[Special;{ menu."
+#define kStrQuitWarningMessage "Choose ;[Shut Down;{ from the ;[Special;{ menu of the emulated computer, then quit ^p again. Quitting now could corrupt the mounted disk image files."
 
 #define kStrReportAbnormalTitle "Abnormal Situation"
 #define kStrReportAbnormalMessage "The emulated computer is attempting an operation that wasn;}t expected to happen in normal use."

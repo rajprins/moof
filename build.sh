@@ -3,6 +3,7 @@
 # Example on how to build Mini vMac on Macintosh
 # https://minivmac.github.io/gryphel-mirror/c/minivmac/options.html
 
+set -eou pipefail
 
 # Clean all old/generated files
 rm -rf ./bld
@@ -10,8 +11,8 @@ rm -rf ./cfg
 rm -rf ./Makefile
 rm -rf ./moof*
 rm -rf ./build
-rm setuptool
-rm makefilegen
+rm -f setuptool
+rm -f makefilegen
 
 # we need to build the setup tool first
 echo "Building setup tool..."
@@ -39,7 +40,7 @@ echo "Running setup tool to generate makefile generator..."
         -speed 4 \
         -ta 2 \
         -em-cpu 2 \
-        -mem 8M \
+        -mem 32M \
         -chr 0 \
         -drc 1 \
         -fullscreen 0 \
@@ -49,6 +50,9 @@ echo "Running setup tool to generate makefile generator..."
 
 # generate makefile and build
 echo "Generating makefile..."
+# The generated script writes relative to my_project_d and relies on
+# it being empty for the current directory; set -u needs it defined.
+my_project_d=""
 . ./makefilegen
 
 echo "Building project..."

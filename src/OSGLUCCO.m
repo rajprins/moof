@@ -365,11 +365,19 @@ bool MNVM_GetAnyDriveInserted(void)
 	return v;
 }
 
+/*
+	Defined in SONYEMDV.c, a separate translation unit, so declared by
+	hand as GLOBGLUE.c does for Sony_SetQuitOnEject. Calling vSonyEject
+	directly would close the image while the disk driver still counted
+	the drive as mounted.
+*/
+IMPORTPROC Sony_EjectDriveFromHost(tDrive Drive_No);
+
 void MNVM_PostEjectDrive(int driveNo)
 {
 	if ((driveNo >= 0) && (driveNo < (int) NumDrives)) {
 		EmuLock_Acquire();
-		(void) vSonyEject((tDrive) driveNo);
+		Sony_EjectDriveFromHost((tDrive) driveNo);
 		EmuLock_Release();
 	}
 }
@@ -1181,6 +1189,36 @@ LOCALFUNC blnr LoadMacRom(void)
 
 
 #if IncludeHostTextClipExchange
+/*
+	Runs a block on the main thread and waits for it.
+
+	The host text clip exchange is reached from a guest extension
+	call, so on the emulator thread, but NSPasteboard belongs to the
+	main thread. dispatch_sync alone would deadlock: the emulator
+	thread holds the emulator lock, and the main thread may be
+	blocked waiting for exactly that lock in the frame driver or in
+	sendEvent:. So the lock is released across the wait, as
+	EmuLock_Yield does. The emulator thread holds it exactly once
+	while running guest code, so one release frees it.
+
+	The main thread may therefore run its usual lock holding work
+	while the guest is in the middle of this call. None of that work
+	touches the Pbuf being exchanged, which the caller has already
+	taken ownership of or not yet created.
+*/
+LOCALPROC MyRunOnMainThread(void (^block)(void))
+{
+	if ([NSThread isMainThread]) {
+		block();
+	} else {
+		EmuLock_Release();
+		dispatch_sync(dispatch_get_main_queue(), block);
+		EmuLock_Acquire();
+	}
+}
+#endif
+
+#if IncludeHostTextClipExchange
 GLOBALOSGLUFUNC tMacErr HTCEexport(tPbuf i)
 {
 	void *Buffer;
@@ -1210,14 +1248,20 @@ GLOBALOSGLUFUNC tMacErr HTCEexport(tPbuf i)
 		NSString *ss = [[[NSString alloc]
 			initWithData:d encoding:NSMacOSRomanStringEncoding]
 			autorelease];
-		NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
-		NSArray *newTypes =
-			[NSArray arrayWithObject: NSPasteboardTypeString];
+		__block BOOL wrote = NO;
 
-		(void) [pasteboard declareTypes: newTypes owner: nil];
-		if ([pasteboard setString: ss
-			forType: NSPasteboardTypeString])
-		{
+		MyRunOnMainThread(^{
+			NSPasteboard *pasteboard =
+				[NSPasteboard generalPasteboard];
+			NSArray *newTypes =
+				[NSArray arrayWithObject: NSPasteboardTypeString];
+
+			(void) [pasteboard declareTypes: newTypes owner: nil];
+			wrote = [pasteboard setString: ss
+				forType: NSPasteboardTypeString];
+		});
+
+		if (wrote) {
 			err = mnvm_noErr;
 		}
 
@@ -1235,18 +1279,28 @@ GLOBALOSGLUFUNC tMacErr HTCEimport(tPbuf *r)
 {
 	tMacErr err = mnvm_miscErr;
 	NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
-	NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
-	NSArray *supportedTypes = [NSArray
-		arrayWithObject: NSPasteboardTypeString];
-	NSString *available = [pasteboard
-		availableTypeFromArray: supportedTypes];
+	__block NSString *string = nil;
 
-	if (nil != available) {
-		NSString *string = [pasteboard
-			stringForType: NSPasteboardTypeString];
-		if (nil != string) {
-			err = NSStringToRomanPbuf(string, r);
+	/*
+		Only the pasteboard read happens on the main thread. The
+		string is copied out so that it outlives that thread's
+		autorelease pool, and the conversion into a Pbuf stays here,
+		since Pbufs are emulator state.
+	*/
+	MyRunOnMainThread(^{
+		NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
+		NSArray *supportedTypes = [NSArray
+			arrayWithObject: NSPasteboardTypeString];
+
+		if (nil != [pasteboard availableTypeFromArray: supportedTypes]) {
+			string = [[pasteboard
+				stringForType: NSPasteboardTypeString] copy];
 		}
+	});
+
+	if (nil != string) {
+		err = NSStringToRomanPbuf(string, r);
+		[string release];
 	}
 
 	[pool release];
@@ -2850,7 +2904,41 @@ LOCALPROC DisconnectKeyCodes3(void)
 
 LOCALVAR blnr PresentingMacMsg = falseblnr;
 
-LOCALPROC CheckSavedMacMsg(void)
+LOCALPROC MyPresentMacMsg(NSString *briefMsg0, NSString *longMsg0,
+	blnr fatal)
+{
+	NSAlert *alert = [[NSAlert alloc] init];
+
+	[alert setAlertStyle: fatal
+		? NSAlertStyleCritical
+		: NSAlertStyleWarning];
+	[alert setMessageText: briefMsg0];
+	[alert setInformativeText: longMsg0];
+
+	if (fatal) {
+		[alert addButtonWithTitle:
+			NSStringCreateFromSubstCStr(kStrCmdQuit)];
+	}
+
+	(void) [alert runModal];
+
+	[alert release];
+
+	EmuLock_Acquire();
+	PresentingMacMsg = falseblnr;
+	if (fatal) {
+		ForceMacOff = trueblnr;
+	}
+	EmuLock_Release();
+}
+
+/*
+	Deferred is the normal case. It is false only at teardown, when
+	main is about to return and the main queue will never be drained
+	again, so a deferred alert -- typically the fatal one explaining
+	why startup failed -- would simply never appear.
+*/
+LOCALPROC CheckSavedMacMsg(blnr deferred)
 {
 	if ((nullpr != SavedBriefMsg) && ! PresentingMacMsg) {
 		blnr fatal = SavedFatalMsg;
@@ -2882,31 +2970,13 @@ LOCALPROC CheckSavedMacMsg(void)
 			compiled without ARC but captured object variables are
 			still retained by a copied block.
 		*/
-		dispatch_async(dispatch_get_main_queue(), ^{
-			NSAlert *alert = [[NSAlert alloc] init];
-
-			[alert setAlertStyle: fatal
-				? NSAlertStyleCritical
-				: NSAlertStyleWarning];
-			[alert setMessageText: briefMsg0];
-			[alert setInformativeText: longMsg0];
-
-			if (fatal) {
-				[alert addButtonWithTitle:
-					NSStringCreateFromSubstCStr(kStrCmdQuit)];
-			}
-
-			(void) [alert runModal];
-
-			[alert release];
-
-			EmuLock_Acquire();
-			PresentingMacMsg = falseblnr;
-			if (fatal) {
-				ForceMacOff = trueblnr;
-			}
-			EmuLock_Release();
-		});
+		if (deferred) {
+			dispatch_async(dispatch_get_main_queue(), ^{
+				MyPresentMacMsg(briefMsg0, longMsg0, fatal);
+			});
+		} else {
+			MyPresentMacMsg(briefMsg0, longMsg0, fatal);
+		}
 	}
 }
 
@@ -3244,7 +3314,14 @@ label_exit:
 		before makeKeyAndOrderFront.
 		And if create after then our content won't
 		be drawn initially, resulting in flicker.
+
+		AppKit calls this whenever it likes, and MyDrawWithMetal
+		writes ScalingBuff and reads the guest framebuffer, so the
+		emulator lock is taken. It is recursive, which matters
+		because this is also reached from ReCreateMainWindow inside
+		the frame driver, where the lock is already held.
 	*/
+	EmuLock_Acquire();
 	if (MyGetRenderer()) {
 		MyDrawWithMetal(0, 0, vMacScreenHeight, vMacScreenWidth);
 
@@ -3270,6 +3347,7 @@ label_exit:
 		}
 #endif
 	}
+	EmuLock_Release();
 }
 
 @end
@@ -4010,7 +4088,7 @@ LOCALPROC CheckForSavedTasks(void)
 		framebuffer indirection in GetCurDrawBuff, and this removes
 		the first of them.
 	*/
-	CheckSavedMacMsg();
+	CheckSavedMacMsg(trueblnr);
 
 #if EnableRecreateW
 	if (0
@@ -4349,6 +4427,37 @@ LOCALPROC MySleepSeconds(double seconds)
 	(void) nanosleep(&rqt, &rmt);
 }
 
+/*
+	What WaitForNextTick does instead of sleeping when reached on the
+	main thread, which only happens from WaitForRom during startup.
+
+	At that point [NSApp run] has already returned and the frame
+	driver has not been started, so nothing else delivers events,
+	runs the host housekeeping or presents a frame. A bare sleep here
+	left the application unable to accept a dropped ROM, to quit, or
+	even to notice a ROM it had loaded: WaitForRom waits for
+	SpeedStopped to clear, but this function keeps waiting until
+	CheckForSavedTasks updates CurSpeedStopped, and nothing called it.
+
+	There is no emulator thread yet, so the lock is free and is taken
+	only by the paths that take it themselves.
+*/
+LOCALPROC MyIdleOnMainThread(double seconds)
+{
+	NSEvent *event;
+
+	CheckForSavedTasks();
+	MyPresentPendingFrame();
+
+	event = [NSApp nextEventMatchingMask: NSEventMaskAny
+		untilDate: [NSDate dateWithTimeIntervalSinceNow: seconds]
+		inMode: NSDefaultRunLoopMode
+		dequeue: YES];
+	if (nil != event) {
+		[NSApp sendEvent: event];
+	}
+}
+
 GLOBALOSGLUPROC WaitForNextTick(void)
 {
 	blnr onEmuThread = EmuThread_IsCurrent();
@@ -4374,7 +4483,7 @@ label_retry:
 			MySleepSeconds(0.010);
 			EmuLock_Acquire();
 		} else {
-			MySleepSeconds(0.010);
+			MyIdleOnMainThread(0.010);
 		}
 		goto label_retry;
 	}
@@ -4388,7 +4497,7 @@ label_retry:
 				MySleepSeconds(inTimeout);
 				EmuLock_Acquire();
 			} else {
-				MySleepSeconds(inTimeout);
+				MyIdleOnMainThread(inTimeout);
 			}
 		} else if (onEmuThread) {
 			/*
@@ -4502,8 +4611,21 @@ LOCALFUNC blnr setupWorkingDirectory(void)
 		return NSTerminateNow;
 	}
 
+	/*
+		Ask, rather than force. RequestMacOff is what the close box
+		uses: CheckForSavedTasks quits at once when no disk image is
+		mounted, and otherwise warns that the emulated computer
+		should be shut down first. Forcing here skipped that warning
+		and risked corrupting mounted images. Without a ROM there is
+		no emulated computer to shut down, so that case still quits
+		straight away.
+	*/
 	EmuLock_Acquire();
-	(void) EmuThread_RequestStop();
+	if (ROM_loaded) {
+		RequestMacOff = trueblnr;
+	} else {
+		(void) EmuThread_RequestStop();
+	}
 	EmuLock_Release();
 
 	return NSTerminateCancel;
@@ -4812,7 +4934,7 @@ LOCALPROC UnInitOSGLU(void)
 	dbglog_close();
 #endif
 
-	CheckSavedMacMsg();
+	CheckSavedMacMsg(falseblnr);
 
 	MyCloseRenderer();
 	CloseMainWindow();

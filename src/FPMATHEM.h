@@ -5989,7 +5989,7 @@ LOCALPROC myfp_ATanh(myfpr *r, myfpr *x)
 	myfpr ldv;
 
 	myfp_Add(&onepx, x, &floatx80_one);
-	myfp_Sub(&onemx, x, &floatx80_one);
+	myfp_Sub(&onemx, &floatx80_one, x);
 	myfp_Div(&dv, &onepx, &onemx);
 	myfp_LogN(&ldv, &dv);
 	myfp_Div(r, &ldv, &floatx80_Two);

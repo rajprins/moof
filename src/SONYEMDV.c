@@ -616,6 +616,34 @@ LOCALFUNC tMacErr Drive_EjectDelete(tDrive Drive_No)
 }
 #endif
 
+/*
+	Eject requested by the host interface rather than by the guest.
+
+	The host must not close the image through vSonyEject on its own:
+	the mounted mask here would still claim the drive, so the guest's
+	next access would reach vSonyTransfer with a closed file, and an
+	image later inserted into the same slot would never be announced.
+	Going through here keeps both views in step and updates the
+	checksums, exactly as a guest eject does. The guest is not told,
+	so to it this looks like a disk pulled from the drive.
+*/
+GLOBALPROC Sony_EjectDriveFromHost(tDrive Drive_No)
+{
+	if ((Drive_No < NumDrives) && vSonyIsInserted(Drive_No)) {
+		if (vSonyIsMounted(Drive_No)) {
+			/*
+				The image offsets the checksums need are only
+				known once the drive has been mounted.
+			*/
+			vSonyMountedMask &= ~ ((ui5b)1 << Drive_No);
+#if Sony_WantChecksumsUpdated
+			Drive_UpdateChecksums(Drive_No);
+#endif
+		}
+		(void) vSonyEject(Drive_No);
+	}
+}
+
 GLOBALPROC Sony_EjectAllDisks(void)
 {
 	tDrive i;

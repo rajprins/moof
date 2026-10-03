@@ -319,8 +319,13 @@ LOCALFUNC int InitLocalTalk(void)
 
 LOCALPROC UnInitLocalTalk(void)
 {
+	if (-1 != fd) {
+		close(fd);
+		fd = -1;
+	}
 	if (NULL != MyRxBuffer) {
 		free(MyRxBuffer);
+		MyRxBuffer = NULL;
 	}
 }
 
