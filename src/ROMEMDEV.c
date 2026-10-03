@@ -221,7 +221,7 @@ LOCALPROC Sony_Install(void)
 	do_put_mem_long(pto, kExtn_Block_Base); /* pokeaddr */
 	pto += 4;
 
-	my_disk_icon_addr = (pto - ROM) + kROM_Base;
+	my_disk_icon_addr = (ui5r)(pto - ROM) + kROM_Base;
 	MyMoveBytes((anyp)my_disk_icon, (anyp)pto, sizeof(my_disk_icon));
 	pto += sizeof(my_disk_icon);
 

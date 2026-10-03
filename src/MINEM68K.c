@@ -387,7 +387,7 @@ LOCALINLINEPROC BackupPC(void)
 
 LOCALINLINEFUNC CPTR m68k_getpc(void)
 {
-	return V_regs.pc + (V_pc_p - V_regs.pc_pLo);
+	return V_regs.pc + (CPTR)(V_pc_p - V_regs.pc_pLo);
 }
 
 
@@ -8663,7 +8663,7 @@ Label_Retry:
 		V_pc_p = p->usebase + (curpc & p->usemask);
 		V_regs.pc_pLo = V_pc_p - (curpc & m2);
 		V_pc_pHi = V_regs.pc_pLo + m2 + 1;
-		V_regs.pc = curpc - (V_pc_p - V_regs.pc_pLo);
+		V_regs.pc = curpc - (ui5r)(V_pc_p - V_regs.pc_pLo);
 	}
 }
 

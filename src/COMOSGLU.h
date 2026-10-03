@@ -296,7 +296,7 @@ LOCALFUNC blnr FindFirstChangeInLVecs(uibb *ptr1, uibb *ptr2,
 	for (i = L; i != 0; --i) {
 		if (*p1++ != *p2++) {
 			--p1;
-			*j = p1 - ptr1;
+			*j = (uimr)(p1 - ptr1);
 			return trueblnr;
 		}
 	}
@@ -314,7 +314,7 @@ LOCALPROC FindLastChangeInLVecs(uibb *ptr1, uibb *ptr2,
 
 	while (*--p1 == *--p2) {
 	}
-	*j = p1 - ptr1;
+	*j = (uimr)(p1 - ptr1);
 }
 
 LOCALPROC FindLeftRightChangeInLMat(uibb *ptr1, uibb *ptr2,

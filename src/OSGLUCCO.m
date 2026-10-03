@@ -753,9 +753,9 @@ GLOBALOSGLUFUNC tMacErr vSonyTransfer(blnr IsWrite, ui3p Buffer,
 
 	if (0 == fseek(refnum, Sony_Start, SEEK_SET)) {
 		if (IsWrite) {
-			NewSony_Count = fwrite(Buffer, 1, Sony_Count, refnum);
+			NewSony_Count = (ui5r)fwrite(Buffer, 1, Sony_Count, refnum);
 		} else {
-			NewSony_Count = fread(Buffer, 1, Sony_Count, refnum);
+			NewSony_Count = (ui5r)fread(Buffer, 1, Sony_Count, refnum);
 		}
 
 		if (NewSony_Count == Sony_Count) {

@@ -618,10 +618,10 @@ LOCALINLINEPROC mul64To128( ui6b a, ui6b b, ui6b *z0Ptr, ui6b *z1Ptr )
 	ui5b aHigh, aLow, bHigh, bLow;
 	ui6b z0, zMiddleA, zMiddleB, z1;
 
-	aLow = a;
-	aHigh = a>>32;
-	bLow = b;
-	bHigh = b>>32;
+	aLow = (ui5b) a;
+	aHigh = (ui5b) (a>>32);
+	bLow = (ui5b) b;
+	bHigh = (ui5b) (b>>32);
 
 	Ui5to6Mul(aLow, bLow, &z1);
 	Ui5to6Mul(aLow, bHigh, &zMiddleA);
@@ -864,7 +864,7 @@ LOCALFUNC si3r countLeadingZeros64( ui6b a )
 	else {
 		a >>= 32;
 	}
-	shiftCount += countLeadingZeros32( a );
+	shiftCount += countLeadingZeros32( (ui5b) a );
 	return shiftCount;
 
 }
@@ -3341,7 +3341,7 @@ LOCALFUNC float32 floatx80_to_float32( floatx80 a )
 	}
 	shift64RightJamming( aSig, 33, &aSig );
 	if ( aExp || aSig ) aExp -= 0x3F81;
-	return roundAndPackFloat32( aSign, aExp, aSig );
+	return roundAndPackFloat32( aSign, aExp, (ui5b) aSig );
 
 }
 

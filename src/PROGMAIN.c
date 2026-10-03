@@ -66,6 +66,30 @@
 
 LOCALPROC EmulatedHardwareZap(void)
 {
+	int i;
+
+	/*
+		Return every inter-chip wire to its power-on state first.
+
+		AddrSpac_Init sets all the wires to 1 at launch, and that is
+		the state the ROM's startup tests are known to pass from.
+		The VIA zaps below clear the VIA registers but not the pins,
+		so after a reset of a running machine the wires kept
+		whatever the guest last drove. On a Mac II that includes
+		VIA2 port A bits 6 and 7, which select the RAM bank size the
+		memory map is built from: the running ROM had left them
+		selecting a 4 MB bank, so after a reset only 8 MB of the
+		32 MB of RAM was visible. The ROM's memory sizing test then
+		failed and the machine sat in its serial Test Manager with
+		the screen frozen, so a reset never rebooted. Setting the
+		wires to 1 here, before Memory_Reset rebuilds the memory map
+		from them, makes a reset start from the same state as a
+		launch.
+	*/
+	for (i = 0; i < kNumWires; ++i) {
+		Wires[i] = 1;
+	}
+
 	Memory_Reset();
 	ICT_Zap();
 	IWM_Reset();

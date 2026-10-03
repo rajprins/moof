@@ -385,7 +385,7 @@ GLOBALFUNC blnr Vid_Init(void)
 	}
 #endif
 
-	UsedSoFar = (pPatch - VidROM) + 20;
+	UsedSoFar = (ui5r)(pPatch - VidROM) + 20;
 	if (UsedSoFar > kVidROM_Size) {
 		ReportAbnormalID(0x0A01, "kVidROM_Size too small");
 		return falseblnr;
