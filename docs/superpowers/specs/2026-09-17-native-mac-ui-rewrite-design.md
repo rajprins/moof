@@ -157,7 +157,7 @@ are 8 uppercase characters, matching the project's existing convention
 | `HOSTFILE.m` | Drives, ROM loading, `NSOpenPanel` |
 | `SNDCOREA.m` | CoreAudio, lifted near-verbatim |
 | `KEYRMPMC.h` | `Keyboard_RemapMac`, `Keyboard_UpdateKeyMap2`, `DisconnectKeyCodes2` |
-| `ROMVALID.h` | `ROM_IsValid`, `Calc_Checksum`, `WaitForRom`, ROM warning messages |
+| `ROMVALID.h` | `ROM_IsValid`, `Calc_Checksum`, `WaitForRom`, ROM and unsupported disk warnings, `MacMsgOverride` |
 | `CCOBRIDG.h` | Obj-C ↔ Swift bridging header |
 | `EMUBRIDG.swift` | Observable emulator state, the sole C boundary for Swift |
 | `SETTINGS.swift` | Settings window content |
@@ -166,8 +166,9 @@ are 8 uppercase characters, matching the project's existing convention
 
 `CONTROLM.h` is deleted. Its cell drawing and ⌃-mode state machine go
 away; `KEYRMPMC.h` and `ROMVALID.h` receive the logic that must survive.
-`GetCurDrawBuff` collapses to returning `screencomparebuff` directly,
-since there is no longer an overlay buffer to choose between.
+`GetCurDrawBuff` is gone: the `SCRNMAPR.h`/`SCRNTRNS.h` instantiations
+read `screencomparebuff` directly, since there is no longer an overlay
+buffer to choose between.
 
 ## §2 Rendering
 
@@ -285,14 +286,28 @@ rejects outright. ARC adoption therefore lands together with the
 split of that file, not before it. Until then new files are written
 MRR correct, as `MTLRENDR.m` is.
 
-### Localization is not touched
+### Localization keeps its format
 
 `INTLCHAR.h` implements a custom substitution format across 11 languages
-(for example `kStrNewCntrlKey "Emulated ;]^m;} key ^k."`, where `;]` and
-`^m` are its own escape syntax). Converting this to `.strings` catalogs
-would risk 11 translations for no user-visible gain.
-`NSStringCreateFromSubstCStr` is exposed through the bridging header and
-SwiftUI views receive already-localized `String` values.
+(for example `kStrNoROMMessage "I can not find the ROM image file
+;[^r;{. …"`, where `;[` and `^r` are its own escape syntax). Converting
+this to `.strings` catalogs would risk 11 translations for no
+user-visible gain, so the format and the `STRCN*.h` files stay.
+
+Their content did change with the overlay's removal. Every string that
+only the overlay drew (the Control Mode screens, its About and help
+text, the menu titles of the old hand-built menu bar) was deleted, so
+each language now defines the same 25 macros: the alert titles and
+messages, and `kStrCmdQuit` for the fatal alert's button. The quit
+warning and the missing-ROM message were rewritten in every language
+to describe the native interface, naming the guest Finder's localized
+Special menu and Shut Down item where those are known and the English
+names otherwise. The 8x16 glyph bitmaps and drawing-only cells went
+from `INTLCHAR.h`, along with the substitution codes that only fed
+overlay screens (`^c ^m ^k ^g ^f ^b ^h ^l ^s`).
+
+The native menus themselves are English for now. `NSStringCreateFromSubstCStr`
+remains the path by which a translated string reaches AppKit.
 
 ## §4 Build generator changes
 
@@ -475,6 +490,7 @@ verified by running the app, not only by compiling it.
 | Framework swap, config includes | `USFILDEF.i`, `WRCNFGAP.i` |
 | Emulator on its own thread, AppKit owns main | `EMUTHRED.h`, `EMUTHRED.m`, `OSGLUCCO.m` |
 | Native menu bar, SwiftUI Settings and About | `APPMENUS.swift`, `SETTINGS.swift`, `ABOUTPNL.swift`, `EMUCTLAP.h`, `EMUBRIDG.swift` |
+| `CONTROLM.h` split, overlay deleted | `KEYRMPMC.h`, `ROMVALID.h`, `INTLCHAR.h`, `STRCN*.h`, `SPBLDOPT.i`, `SPCNFGAP.i`, `GNBLDOPT.i`, `SPFILDEF.i` |
 
 The thread move is in place and verified. `main` now runs `[NSApp run]`
 for the life of the process; `ProgramMain` runs on a thread named
@@ -533,11 +549,36 @@ accessibility API, and the Settings window renders with live values
 read out of the emulator — it showed 16x, which is the `-speed 4` the
 build was generated with.
 
+The overlay is gone. `CONTROLM.h`, `ALTKEYSM.h` and `ACTVCODE.h` are
+deleted, and with them the overlay's framebuffer copy
+(`CntrlDisplayBuff`), which also leaves `ChooseTotMemSize`. What had to
+survive was split out: key remapping into `KEYRMPMC.h`, ROM validation
+and the startup wait for a ROM into `ROMVALID.h`. Behaviour changes:
+
+- The host Control key now reaches the guest as its Control key. It
+  used to map to `CM`, the key that entered Control Mode. Menu key
+  equivalents are still matched in `sendEvent:` first, so only
+  unclaimed ⌃ chords reach the guest. `-ccs` now plainly exchanges
+  Control and Command.
+- Removed setuptool options, each of which only configured the
+  overlay: the `-km … CM` destination, `-ekt` (emulated Control toggle
+  key), `-eck`, `-eci`, `-ecr`, `-iid`, `-akm` (alternate keyboard
+  mode), and the upstream licensing features `-dmo` and `-act`. The
+  build scripts pass none of them.
+- With no ROM, `WaitForRom` raises an ordinary `MacMsg`, presented as
+  an `NSAlert`, telling the user to drop a ROM on the window or use
+  File ▸ Open Disk Image…, instead of drawing into the guest screen.
+  Verified by running a ROM-less copy: the alert appears, and the
+  process exits promptly on `kill`.
+
+`EnableDemoMsg` is still emitted, fixed at 0, only because
+`WaitForNextTick` tests it with `#if` under `-Wundef`; it can go once
+that test is removed.
+
 **Not done.**
 
 | Area | Files |
 |---|---|
-| `CONTROLM.h` split, overlay deleted | `KEYRMPMC.h`, `ROMVALID.h` |
 | Native fullscreen | `OSGLUCCO.m` |
 | `NSAlert`, deprecation sweep, ARC | all |
 | Backend split | `HOSTFILE.m`, `SNDCOREA.m` |

@@ -93,21 +93,6 @@ LOCALPROC UnInitPbufs(void)
 #endif
 
 #if IncludePbufs
-#define PbufHaveLock 1
-#endif
-
-#if IncludePbufs
-LOCALFUNC ui3p PbufLock(tPbuf i)
-{
-	return (ui3p)PbufDat[i];
-}
-#endif
-
-#if IncludePbufs
-#define PbufUnlock(i)
-#endif
-
-#if IncludePbufs
 GLOBALOSGLUPROC PbufTransfer(ui3p Buffer,
 	tPbuf i, ui5r offset, ui5r count, blnr IsWrite)
 {

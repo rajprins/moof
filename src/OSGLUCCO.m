@@ -54,12 +54,10 @@ GLOBALOSGLUPROC MyMoveBytes(anyp srcPtr, anyp destPtr, si5b byteCount)
 	(void) memcpy((char *)destPtr, (char *)srcPtr, byteCount);
 }
 
-/* --- control mode and internationalization --- */
+/* --- internationalization --- */
 
 #define NeedCell2UnicodeMap 1
 #define NeedRequestInsertDisk 1
-#define NeedDoMoreCommandsMsg 1
-#define NeedDoAboutMsg 1
 
 #include "INTLCHAR.h"
 
@@ -119,11 +117,20 @@ LOCALPROC dbglog_close0(void)
 
 #include "COMOSGLU.h"
 
-#define WantKeyboard_RemapMac 1
-
 #include "PBUFSTDC.h"
 
-#include "CONTROLM.h"
+#include "KEYRMPMC.h"
+#include "ROMVALID.h"
+
+/*
+	Used to live in the Control Mode overlay, whose speed screen was
+	one of its two callers. The Speed menu, through EMUCTLAP.h, is
+	the other and keeps it.
+*/
+LOCALPROC SetSpeedValue(ui3b i)
+{
+	SpeedValue = i;
+}
 
 /* --- swift bridge --- */
 
@@ -1841,7 +1848,7 @@ LOCALVAR ui3p CLUT_final;
 
 
 #define ScrnMapr_DoMap UpdateBWLuminanceCopy
-#define ScrnMapr_Src GetCurDrawBuff()
+#define ScrnMapr_Src screencomparebuff
 #define ScrnMapr_Dst ScalingBuff
 #define ScrnMapr_SrcDepth 0
 #define ScrnMapr_DstDepth 3
@@ -1853,7 +1860,7 @@ LOCALVAR ui3p CLUT_final;
 #if (0 != vMacScreenDepth) && (vMacScreenDepth < 4)
 
 #define ScrnMapr_DoMap UpdateMappedColorCopy
-#define ScrnMapr_Src GetCurDrawBuff()
+#define ScrnMapr_Src screencomparebuff
 #define ScrnMapr_Dst ScalingBuff
 #define ScrnMapr_SrcDepth vMacScreenDepth
 #define ScrnMapr_DstDepth 5
@@ -1866,7 +1873,7 @@ LOCALVAR ui3p CLUT_final;
 #if vMacScreenDepth >= 4
 
 #define ScrnTrns_DoTrans UpdateTransColorCopy
-#define ScrnTrns_Src GetCurDrawBuff()
+#define ScrnTrns_Src screencomparebuff
 #define ScrnTrns_Dst ScalingBuff
 #define ScrnTrns_SrcDepth vMacScreenDepth
 #define ScrnTrns_DstDepth 5
@@ -4295,24 +4302,12 @@ LOCALPROC CheckForSavedTasks(void)
 	}
 #endif
 
-	if (NeedWholeScreenDraw) {
-		NeedWholeScreenDraw = falseblnr;
-		ScreenChangedAll();
-	}
-
 	if (! gTrueBackgroundFlag) {
 		if (RequestInsertDisk) {
 			RequestInsertDisk = falseblnr;
 			InsertADisk0();
 		}
 	}
-
-#if NeedRequestIthDisk
-	if (0 != RequestIthDisk) {
-		Sony_InsertIth(RequestIthDisk);
-		RequestIthDisk = 0;
-	}
-#endif
 
 	if (HaveCursorHidden != (
 #if MayNotFullScreen
@@ -4788,21 +4783,6 @@ LOCALFUNC blnr setupWorkingDirectory(void)
 	return NSTerminateCancel;
 }
 
-- (IBAction)performSpecialMoreCommands:(id)sender
-{
-	DoMoreCommandsMsg();
-}
-
-- (IBAction)performFileOpen:(id)sender
-{
-	RequestInsertDisk = trueblnr;
-}
-
-- (IBAction)performApplicationAbout:(id)sender
-{
-	DoAboutMsg();
-}
-
 @end
 
 /*
@@ -4952,10 +4932,6 @@ LOCALPROC ReserveAllocAll(void)
 
 	ReserveAllocOneBlock(&screencomparebuff,
 		vMacScreenNumBytes, 5, trueblnr);
-#if UseControlKeys
-	ReserveAllocOneBlock(&CntrlDisplayBuff,
-		vMacScreenNumBytes, 5, falseblnr);
-#endif
 
 	ReserveAllocOneBlock(&ScalingBuff, vMacScreenNumPixels
 #if 0 != vMacScreenDepth
@@ -5031,9 +5007,6 @@ LOCALFUNC blnr InitOSGLU(void)
 			for initial files.
 			So must load ROM, disk1.dsk, etc first.
 		*/
-#if UseActvCode
-	if (ActvCodeInit())
-#endif
 	if (InitLocationDat())
 	if (Screen_Init())
 	if (CreateMainWindow())
@@ -5062,10 +5035,6 @@ LOCALPROC UnInitOSGLU(void)
 #if dbglog_HAVE && 0
 	DumpRTC();
 #endif
-
-	if (MacMsgDisplayed) {
-		MacMsgDisplayOff();
-	}
 
 #if EmLocalTalk
 	UnInitLocalTalk();

@@ -1215,75 +1215,11 @@ LOCALFUNC tMyErr ChooseNeedIntl(void)
 }
 
 
-/* option: Demo Message */
-
-LOCALVAR blnr WantDemoMsg;
-LOCALVAR ui3r olv_DemoMsg;
-
-LOCALPROC ResetDemoMsg(void)
-{
-	WantDemoMsg = nanblnr;
-	olv_DemoMsg = 0;
-}
-
-LOCALFUNC tMyErr TryAsDemoMsgNot(void)
-{
-	return BooleanTryAsOptionNot("-dmo", &WantDemoMsg, &olv_DemoMsg);
-}
-
-#define dfo_DemoMsg() falseblnr
-
-LOCALFUNC tMyErr ChooseDemoMsg(void)
-{
-	if (nanblnr == WantDemoMsg) {
-		WantDemoMsg = dfo_DemoMsg();
-	}
-
-	return kMyErr_noErr;
-}
-
-
-/* option: Activation Code */
-
-LOCALVAR blnr WantActvCode;
-#define NumKeyCon 7
-LOCALVAR long KeyCon[NumKeyCon];
-LOCALVAR ui3r olv_ActvCode;
-
-LOCALPROC ResetActvCode(void)
-{
-	WantActvCode = falseblnr;
-	olv_ActvCode = 0;
-}
-
-LOCALFUNC tMyErr TryAsActvCodeNot(void)
-{
-	tMyErr err;
-	int i;
-
-	if (kMyErr_noErr != (err = CurArgIsOption("-act", &olv_ActvCode))) {
-		/* no */
-	} else
-	{
-		WantActvCode = trueblnr;
-		for (i = 0; i < NumKeyCon; ++i) {
-			err = GetCurArgOptionAsNumber("-act", &KeyCon[i]);
-			if (kMyErr_noErr != err) {
-				goto Label_1;
-			}
-		}
-		err = kMyErr_noErr;
-Label_1:
-		;
-	}
-
-	return err;
-}
-
-LOCALFUNC tMyErr ChooseActvCode(void)
-{
-	return kMyErr_noErr;
-}
+/*
+	The "-dmo" demonstration message and "-act" activation code
+	options were upstream licensing features, drawn into the Control
+	Mode overlay, so they are gone along with it.
+*/
 
 
 /* --- end of default definition of options --- */
@@ -1357,8 +1293,6 @@ LOCALPROC GNDevResetCommandLineParameters(void)
 	ResetAbbrevName();
 	ResetVariationName();
 	ResetNeedIntl();
-	ResetDemoMsg();
-	ResetActvCode();
 }
 
 LOCALFUNC tMyErr TryAsGNDevOptionNot(void)
@@ -1380,8 +1314,6 @@ LOCALFUNC tMyErr TryAsGNDevOptionNot(void)
 	if (kMyErrNoMatch == (err = TryAsAbbrevNameOptionNot()))
 	if (kMyErrNoMatch == (err = TryAsVariationNameOptionNot()))
 	if (kMyErrNoMatch == (err = TryAsNeedIntlNot()))
-	if (kMyErrNoMatch == (err = TryAsDemoMsgNot()))
-	if (kMyErrNoMatch == (err = TryAsActvCodeNot()))
 	{
 	}
 
@@ -1407,8 +1339,6 @@ LOCALFUNC tMyErr AutoChooseGNDevSettings(void)
 	if (kMyErr_noErr == (err = ChooseAbbrevName()))
 	if (kMyErr_noErr == (err = ChooseVariationName()))
 	if (kMyErr_noErr == (err = ChooseNeedIntl()))
-	if (kMyErr_noErr == (err = ChooseDemoMsg()))
-	if (kMyErr_noErr == (err = ChooseActvCode()))
 	{
 		err = kMyErr_noErr;
 	}
@@ -1432,7 +1362,5 @@ LOCALPROC WrtOptGNDevSettings(void)
 	/* AbbrevName */
 	/* ConfigDir */
 	/* Err2File */
-	/* WantDemoMsg */
-	/* WantActvCode */
 }
 #endif
