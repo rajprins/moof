@@ -279,10 +279,13 @@ label_retry:
 #else
 		{
 			/*
-				checking for own packets isn't needed, because of
-				packetIsOneISent check. if someone else is masquerading
-				as our address, it probably is more accurate emulation
-				to accept the packet.
+				LT_MayHaveEcho is always 1, so this branch is not
+				compiled. Were it ever reinstated, checking for own
+				packets would not be needed here: a transport built
+				without echo must filter its own frames itself. If
+				someone else is masquerading as our address, it
+				probably is more accurate emulation to accept the
+				packet.
 			*/
 
 			/* ok */

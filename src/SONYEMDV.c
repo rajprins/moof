@@ -664,19 +664,34 @@ GLOBALPROC Sony_EjectDriveFromHost(tDrive Drive_No)
 	}
 }
 
-GLOBALPROC Sony_EjectAllDisks(void)
+/*
+	Called when the emulated machine is reset, from the host's Machine
+	menu or by the RESET instruction the Finder executes on Restart.
+
+	This used to eject every image, closing the host files, so a reset
+	Mac came back to the blinking question mark disk. Real hardware
+	does not do that: the reset line leaves disks in their drives, and
+	the Finder ejects floppies itself, through the driver, before it
+	restarts. So only the guest's view is dropped here. The images stay
+	inserted, become pending again, and are announced to the new disk
+	driver once it registers its mount callback after the reboot,
+	exactly as images present at launch are.
+
+	Checksums are only updated for drives that were mounted, because
+	the image offsets they need are not known before that.
+*/
+GLOBALPROC Sony_UnmountAllDisks(void)
 {
 	tDrive i;
 
-	vSonyMountedMask = 0;
 	for (i = 0; i < NumDrives; ++i) {
-		if (vSonyIsInserted(i)) {
+		if (vSonyIsMounted(i)) {
 #if Sony_WantChecksumsUpdated
 			Drive_UpdateChecksums(i);
 #endif
-			(void) vSonyEject(i);
 		}
 	}
+	vSonyMountedMask = 0;
 }
 
 GLOBALPROC Sony_Reset(void)

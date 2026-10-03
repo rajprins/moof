@@ -4613,6 +4613,7 @@ LOCALPROC MyIdleOnMainThread(double seconds)
 GLOBALOSGLUPROC WaitForNextTick(void)
 {
 	blnr onEmuThread = EmuThread_IsCurrent();
+	blnr releasedLock = falseblnr;
 	NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
 
 label_retry:
@@ -4634,6 +4635,7 @@ label_retry:
 			EmuLock_Release();
 			MySleepSeconds(0.010);
 			EmuLock_Acquire();
+			releasedLock = trueblnr;
 		} else {
 			MyIdleOnMainThread(0.010);
 		}
@@ -4648,6 +4650,7 @@ label_retry:
 				EmuLock_Release();
 				MySleepSeconds(inTimeout);
 				EmuLock_Acquire();
+				releasedLock = trueblnr;
 			} else {
 				MyIdleOnMainThread(inTimeout);
 			}
@@ -4658,16 +4661,27 @@ label_retry:
 				briefly on purpose.
 			*/
 			EmuLock_Yield();
+			releasedLock = trueblnr;
 		}
 		goto label_retry;
+	}
+
+	/*
+		A tick that is already due returns straight from the first
+		test above without ever releasing the lock. When emulation
+		cannot keep up with real time -- a slow host, a debug or
+		Thread Sanitizer build -- every tick is already due, so the
+		main thread would never get the lock again: no events, no
+		frames, and a quit that waits forever. Yield once per tick
+		whenever this call has not already let go.
+	*/
+	if (onEmuThread && ! releasedLock) {
+		EmuLock_Yield();
 	}
 
 	if (CheckDateTime()) {
 #if MySoundEnabled
 		MySound_SecondNotify();
-#endif
-#if EnableDemoMsg
-		DemoModeSecondNotify();
 #endif
 	}
 

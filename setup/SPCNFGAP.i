@@ -185,16 +185,6 @@ LOCALPROC WriteAppSpecificCNFUDOSGoptions(void)
 		WriteDestFileLn("#define GrabKeysFullScreen 0");
 	}
 
-	/*
-		The demonstration message, like the activation code, was an
-		upstream licensing feature drawn into the Control Mode
-		overlay, and both are gone along with it. It is written as
-		permanently off only because WaitForNextTick still tests it
-		with #if, and the build warns about undefined macros there.
-		Drop this line once that test is removed.
-	*/
-	WriteCompCondBool("EnableDemoMsg", falseblnr);
-
 	WriteBlankLineToDestFile();
 	WriteDestFileLn("/* version and other info to display to user */");
 
