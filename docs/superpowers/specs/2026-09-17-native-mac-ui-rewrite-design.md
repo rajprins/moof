@@ -587,6 +587,91 @@ A copy of `extras/roms/MacII.ROM` sits at the repository root so the
 app can be launched for testing. It is ignored by `.gitignore`
 (`/*.ROM`).
 
+## Runtime verification, 2026-10-03
+
+Run against the native-mac-ui branch after the six-way fan-out
+(audio, cpu, devices, host, localtalk, overlay) was integrated. Each
+row was exercised in the running app, with the guest screen captured
+by window id (`screencapture -l`) so overlapping windows cannot taint
+the result, and the emulator state read through `lldb` where the
+screen alone was ambiguous.
+
+| Check | Result |
+|---|---|
+| Boot to desktop, 4 MB and 32 MB | OK |
+| Machine › Reset, twice in a row | OK, after the fix below |
+| Machine › Interrupt | OK, debugger prompt; `G` resumes |
+| Speed 1×/4×/8×/All Out radio state | OK |
+| Pause / resume stops and restarts the audio unit | OK (`cur_audio.wantplaying` 1 → 0 → 1) |
+| Audio ring buffer advances while running | OK |
+| Open Disk Image… with an unrecognised image | OK, native "Unsupported Disk Image" alert |
+| Second HFS image mounts; File › Eject lists both | OK |
+| Host eject of a guest-mounted disk | OK, "Eject Anyway" sheet, drive empties |
+| Guest eject (⌘E on the icon) | OK, host menu updates |
+| Quit with a disk mounted | OK, warning alert, process stays up |
+| Settings window | OK |
+| LocalTalk over UDP, built with `-lt -lto udp` | OK at the transport level: socket on 1954, joined 239.192.76.84, `LT_ReceivePacket` parses an injected frame, `LT_TransmitPacket` reaches a host listener |
+
+Not exercised: a guest-to-guest AppleTalk session through the Chooser,
+and the BPF transport. Driving the guest menu bar from a script needs
+a sustained press, which synthetic CGEvents did not deliver reliably,
+so that part was left to a manual test.
+
+### Warm reset hung in the ROM Test Manager
+
+`Machine › Reset` left the guest frozen on its last frame. The CPU was
+alive and looping at ROM `0x40802edc`, the serial Test Manager. An
+instruction trace of the ROM's RAM sizing routine (`0x40803944`) on a
+cold boot and after a reset showed the difference: cold boot reads VIA2
+port A bits 6 and 7 as a 16 MB bank and finds 32 MB of RAM; after a
+reset it read a 4 MB bank and found only 8 MB, because those pins live
+in `Wires[]` and `VIA2_Zap` clears the VIA registers but not the pins.
+The probe at the top of RAM then failed and the ROM parked itself.
+
+The fix in `EmulatedHardwareZap` sets every wire to 1 before
+`Memory_Reset` rebuilds the memory map, which is the state
+`AddrSpac_Init` starts from. The same hang reproduces on the
+pre-rewrite master, so this is an upstream Mini vMac bug, not a
+regression from the rewrite, and is a candidate for a second pull
+request to minivmac/minivmac alongside the LocalTalk one. The commit
+is `a7e6acb`.
+
+Two earlier guesses were wrong and are recorded so they are not tried
+again: clearing the wires to 0 selects a different wrong bank, and
+calling `Vid_Reset` on reset changes nothing.
+
+### Release builds are fully stripped
+
+The generated project sets `STRIP_INSTALLED_PRODUCT`,
+`DEPLOYMENT_POSTPROCESSING` and `STRIPFLAGS = -u -r`, so a `./build.sh`
+binary has no symbols and `lldb` cannot read a single global. Every
+debugging session today began by rebuilding with those turned off.
+Both the Thread Sanitizer run and this one used the same override
+rather than a generator option, so nothing is baked into `setup/`:
+
+```sh
+xcodebuild -project moof.xcodeproj -configuration Release \
+    STRIP_INSTALLED_PRODUCT=NO DEPLOYMENT_POSTPROCESSING=NO \
+    GCC_OPTIMIZATION_LEVEL=0 DEBUG_INFORMATION_FORMAT=dwarf \
+    GCC_GENERATE_DEBUGGING_SYMBOLS=YES \
+    CONFIGURATION_BUILD_DIR=/tmp/sym
+```
+
+`GCC_GENERATE_DEBUGGING_SYMBOLS=YES` is the one that matters for
+struct layouts; without it the binary keeps symbol names but no DWARF,
+and `p regs.pc` fails. A `--debug` flag on `build.sh` that passes these
+would be a small, worthwhile follow-up.
+
+### Testing notes
+
+- A second Moof instance (the user's own) was running throughout.
+  Capturing a screen rectangle picked up whichever window was on top;
+  capturing by window id did not. `pgrep -f` on a relative app path
+  also matched nothing, so launch test copies by absolute path.
+- The emulator pauses when its window is not key unless Run in
+  Background is on. A reset posted while another app is frontmost is
+  queued, not lost, and runs when the window becomes key again.
+
 ## Out of scope
 
 - Changing the emulator configuration model (model, RAM, resolution,
