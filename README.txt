@@ -1,21 +1,16 @@
-MnvM_b37: README
-Paul C. Pratt
-www.gryphel.com
-July 27, 2005
+Moof: README
+
+Moof is a miniature Macintosh 68K emulator for Apple Silicon Macs,
+descended from the emulator written by Paul C. Pratt.
+
+See README.md for how to build it.
 
 
-MnvM_b37 is the build system for Mini vMac,
-a miniature Macintosh emulator.
-
-Further information may be found at
-"https://www.gryphel.com/c/minivmac/".
-
-
-You can redistribute MnvM_b37 and/or modify it under the terms
+You can redistribute Moof and/or modify it under the terms
 of version 2 of the GNU General Public License as published by
 the Free Software Foundation.  See the included file COPYING.
 
-MnvM_b37 is distributed in the hope that it will be useful,
+Moof is distributed in the hope that it will be useful,
 but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 license for more details.
