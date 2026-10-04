@@ -192,7 +192,7 @@ GLOBALFUNC blnr Vid_Init(void)
 	pTo_BoardType = ReservePatchOSLstEntry();
 	pTo_BoardName = ReservePatchOSLstEntry();
 	PatchADatLstEntry(0x20 /* BoardId */, 0x0000764D);
-		/* 'vM', for Mini vMac */
+		/* 'vM', the board id the emulator has always reported */
 	pTo_VenderInfo = ReservePatchOSLstEntry();
 	PatchAnEndOfLst();
 
@@ -204,16 +204,14 @@ GLOBALFUNC blnr Vid_Init(void)
 
 	PatchAReservedOSLstEntry(pTo_BoardName, 0x02 /* sRsrcName */);
 	/*
-		'Mini vMac video card' as ascii c string
+		'Moof video card' as ascii c string
 		(null terminated), and
 		zero padded to end aligned long.
 	*/
-	PatchALong(0x4D696E69);
-	PatchALong(0x20764D61);
-	PatchALong(0x63207669);
-	PatchALong(0x64656F20);
-	PatchALong(0x63617264);
-	PatchALong(0x00000000);
+	PatchALong(0x4D6F6F66);
+	PatchALong(0x20766964);
+	PatchALong(0x656F2063);
+	PatchALong(0x61726400);
 
 	PatchAReservedOSLstEntry(pTo_VenderInfo, 0x24 /* vendorInfo */);
 

@@ -57,7 +57,7 @@ LOCALPROC WriteCommonCNFUIALLContents(void)
 	/*
 		These were derived from the CPU family table, which had no a64
 		entry, so an Apple Silicon build answered false to all three.
-		NeedIntFormatInfo is off for Mini vMac anyway.
+		NeedIntFormatInfo is off for this emulator anyway.
 	*/
 	WriteCompCondBool("MostSigByteFirst", falseblnr);
 	WriteCompCondBool("LeastSigByteFirst", falseblnr);

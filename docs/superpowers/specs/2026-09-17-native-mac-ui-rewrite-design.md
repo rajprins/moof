@@ -5,7 +5,7 @@ Status: Approved for planning
 
 ## Summary
 
-Replace the Cocoa backend of Mini vMac with a modern, fully native macOS
+Replace the inherited Cocoa backend with a modern, fully native macOS
 host layer: AppKit + SwiftUI chrome, Metal rendering, and the emulator
 core running on its own thread under a normal AppKit run loop.
 
@@ -17,8 +17,8 @@ generator in `setup/` that must learn to emit Swift.
 
 The original request asked to identify non-Apple UI toolkits that could
 be replaced with SwiftUI. There are none. The application links exactly
-three frameworks (`minivmac.xcodeproj/project.pbxproj:29-31`): AppKit,
-AudioUnit, and OpenGL. The SDL backends carried by upstream Mini vMac
+three frameworks (`moof.xcodeproj/project.pbxproj:29-31`): AppKit,
+AudioUnit, and OpenGL. The SDL backends carried by the upstream emulator
 were already removed during the Apple Silicon reduction, as recorded in
 `setup/GNBLDOPT.i:796`: "Only the Cocoa backend ("cco",
 src/OSGLUCCO.m) remains."
@@ -312,8 +312,8 @@ remains the path by which a translated string reaches AppKit.
 ## §4 Build generator changes
 
 The Xcode project is a generated artifact. `build.sh:8-14` deletes
-`./minivmac*`, `./cfg` and `./build` on every run, so hand-edits to
-`minivmac.xcodeproj` are discarded. Xcode is the only supported output
+`./moof*`, `./cfg` and `./build` on every run, so hand-edits to
+`moof.xcodeproj` are discarded. Xcode is the only supported output
 (`setup/GNBLDOPT.i:705-709`); no Makefile is emitted, and the
 `rm -rf ./Makefile` at `build.sh:10` is vestigial from upstream, which
 supports Makefile output for other platforms. There is therefore only
@@ -354,7 +354,7 @@ questions that could invalidate the design are answered first.
 **Checkpoint 1 — Swift in a generated project. Resolved, passed.**
 `EMUBRIDG.swift` compiles and links in a project emitted by the
 generator. Objective-C reaches Swift through the generated
-`minivmac-Swift.h`, and Swift reaches C through `CCOBRIDG.h`. Verified
+`EmuBridge-Swift.h`, and Swift reaches C through `CCOBRIDG.h`. Verified
 at runtime: the bridge reported `speed exponent 4`, which is the value
 `build.sh` passes as `-speed 4`, so a real emulator global crossed both
 directions rather than a stub.
@@ -399,7 +399,7 @@ Run on 2026-09-17 against the threaded build. There is no TSan option
 in the generator; the build is produced by overriding settings on the
 command line, so nothing about this diagnostic is baked into `setup/`:
 
-    xcodebuild -project minivmac.xcodeproj -configuration Release \
+    xcodebuild -project moof.xcodeproj -configuration Release \
       OTHER_CFLAGS="-fsanitize=thread -g -fno-omit-frame-pointer" \
       OTHER_LDFLAGS="-fsanitize=thread" \
       OTHER_SWIFT_FLAGS="-sanitize=thread" \
@@ -494,7 +494,7 @@ verified by running the app, not only by compiling it.
 
 The thread move is in place and verified. `main` now runs `[NSApp run]`
 for the life of the process; `ProgramMain` runs on a thread named
-"minivmac emulator". `WaitForNextTick` only paces and releases the
+"moof emulator". `WaitForNextTick` only paces and releases the
 lock while sleeping. Events arrive through a `MyClassApplication`
 override of `sendEvent:`, which takes the lock and asks
 `ProcessOneSystemEvent` whether the emulator consumed the event,
@@ -528,7 +528,7 @@ about because they are easy to reintroduce:
    `wantsLayer = YES`, or AppKit treats the view as layer-backed and
    contends for layer ownership.
 
-The chrome is in. The menu bar is Apple / Mini vMac / File / Machine /
+The chrome is in. The menu bar is Apple / Moof / File / Machine /
 View / Window, with Control key equivalents because the guest takes
 every Command keystroke. Check marks and enablement are answered in
 `validateMenuItem` rather than pushed, since the emulator changes that
@@ -631,9 +631,9 @@ The probe at the top of RAM then failed and the ROM parked itself.
 The fix in `EmulatedHardwareZap` sets every wire to 1 before
 `Memory_Reset` rebuilds the memory map, which is the state
 `AddrSpac_Init` starts from. The same hang reproduces on the
-pre-rewrite master, so this is an upstream Mini vMac bug, not a
+pre-rewrite master, so this is an upstream emulator bug, not a
 regression from the rewrite, and is a candidate for a second pull
-request to minivmac/minivmac alongside the LocalTalk one. The commit
+request to the upstream project alongside the LocalTalk one. The commit
 is `a7e6acb`.
 
 Two earlier guesses were wrong and are recorded so they are not tried

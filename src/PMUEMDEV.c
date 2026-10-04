@@ -385,7 +385,7 @@ GLOBALPROC PmuToReady_ChangeNtfy(void)
 					}
 				}
 				if (nullpr == PMU_p) {
-					/* mini vmac bug if ever happens */
+					/* emulator bug if ever happens */
 					ReportAbnormalID(0x0E0D,
 						"PMU_p null while kPMUStateRecievingBuffer");
 				} else {

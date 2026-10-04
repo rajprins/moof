@@ -1267,10 +1267,10 @@ GLOBALOSGLUPROC WarnMsgAbnormalID(ui4r id)
 	cryptographic rigor not claimed. or any rigor.
 
 	there is code for a serious implementation of an entropy
-	pool in the Mini vMac extra "MakeRand" (adapted from
+	pool in the upstream extra "MakeRand" (adapted from
 	MacPGP), but it seems massive overkill for the purpose
 	here - minimizing the chance that two instances of
-	Mini vMac pick the same LT_NodeHint and LT_MyStamp.
+	Moof pick the same LT_NodeHint and LT_MyStamp.
 */
 
 LOCALVAR ui5b e_p[2] = {

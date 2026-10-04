@@ -19,12 +19,12 @@
 
 	The Sony hardware is not actually emulated. Instead the
 	ROM is patched to replace the Sony disk driver with
-	code that calls Mini vMac extensions implemented in
+	code that calls the emulator extensions implemented in
 	the file.
 
 	Information neeeded to better support the Disk Copy 4.2
 	format was found in libdc42.c of the Lisa Emulator Project
-	by Ray A. Arachelian, and adapted to Mini vMac
+	by Ray A. Arachelian, and adapted to this emulator
 	by Jesus A. Alvarez.
 */
 
@@ -714,7 +714,7 @@ GLOBALPROC Sony_Reset(void)
 }
 
 /*
-	Mini vMac extension for low level access to disk operations.
+	Emulator extension for low level access to disk operations.
 */
 
 #define kCmndDiskNDrives 1
@@ -927,7 +927,7 @@ GLOBALPROC ExtnDisk_Access(CPTR p)
 
 
 /*
-	Mini vMac extension that implements most of the logic
+	Emulator extension that implements most of the logic
 	of the replacement disk driver patched into the emulated ROM.
 	(sony_driver in ROMEMDEV.c)
 

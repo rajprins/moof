@@ -43,7 +43,7 @@ static struct bpf_insn insns[] =
 	The 's' byte represents the source mac address (ours) and we don't
 	have to initialize it because the MAC device will automatically
 	fill it in for us.  The four 'p' bytes represent the process number
-	of this Mini vMac application.  It helps differentiate packets
+	of this Moof application.  It helps differentiate packets
 	between two applications running on the same machine.  It is not
 	used at this time.  There is a small chance two applications could
 	get the same LLAP/SDLC address to start with and would not work

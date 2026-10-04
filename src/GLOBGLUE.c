@@ -1109,7 +1109,7 @@ LOCALPROC SetUp_address(void)
 #endif
 
 /*
-	unlike in the real Mac Plus, Mini vMac
+	unlike in the real Mac Plus, the emulator
 	will allow misaligned memory access,
 	since it is easier to allow it than
 	it is to correctly simulate a bus error

@@ -122,7 +122,7 @@ static void * EmuThread_Main(void *arg)
 
 	gIsEmuThread = true;
 
-	pthread_setname_np("minivmac emulator");
+	pthread_setname_np("moof emulator");
 
 	/*
 		The loop holds the lock while it computes and releases it

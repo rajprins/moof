@@ -1258,7 +1258,7 @@ LOCALFUNC blnr LoadMacRom(void)
 	}
 
 	(void) err; /* ignore any errors */
-	return trueblnr; /* keep launching Mini vMac, regardless */
+	return trueblnr; /* keep launching Moof, regardless */
 }
 
 
@@ -5363,7 +5363,7 @@ LOCALFUNC blnr InitCocoaStuff(void)
 #endif
 		/*
 			If use finishLaunching, after
-			Hide Mini vMac command, activating from
+			Hide Moof command, activating from
 			Dock doesn't bring our window forward.
 			Using "run" instead fixes this.
 			As suggested by Hugues De Keyzer in

@@ -40,7 +40,7 @@
 #endif
 
 #ifndef kSwiftIfaceHeaderName
-#define kSwiftIfaceHeaderName "minivmac-Swift.h"
+#define kSwiftIfaceHeaderName "moof-Swift.h"
 #endif
 
 #ifndef UseMachinOSX

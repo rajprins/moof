@@ -208,7 +208,7 @@ EXPORTVAR(ui4r, MasterMyEvtQLock)
 EXPORTFUNC blnr FindKeyEvent(int *VirtualKey, blnr *KeyDown);
 
 
-/* minivmac extensions */
+/* emulator extensions */
 
 #define ExtnDat_checkval 0
 #define ExtnDat_extension 2
