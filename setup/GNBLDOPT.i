@@ -1184,11 +1184,6 @@ LOCALFUNC tMyErr TryAsVariationNameOptionNot(void)
 
 LOCALFUNC tMyErr ChooseVariationName(void)
 {
-#if 0
-	if (nullpr == vVariationName) {
-	}
-#endif
-
 	return kMyErr_noErr;
 }
 
@@ -1345,22 +1340,3 @@ LOCALFUNC tMyErr AutoChooseGNDevSettings(void)
 
 	return err;
 }
-
-#if 0
-LOCALPROC WrtOptGNDevSettings(void)
-{
-	WrtOptOfficialBin();
-	WrtOptIdeVers();
-	WrtOptListOption();
-	WrtOptUseAllFiles();
-	WrtOptPrintVarName();
-	WrtOptPrintVarOpts();
-	/* Maintainer */
-	/* HomePage */
-	/* Sponsor */
-	/* VariationName */
-	/* AbbrevName */
-	/* ConfigDir */
-	/* Err2File */
-}
-#endif

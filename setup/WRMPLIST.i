@@ -133,24 +133,10 @@ LOCALPROC WriteInfoPList(MyProc p)
 	CurPListFormat = kPListRaw;
 
 	WriteDestFileLn("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
-#if 0
 	WriteDestFileLn(
-		"<!DOCTYPE plist SYSTEM \"file://"
-		"localhost/System/Library/DTDs/PropertyList.dtd\">");
-	WriteDestFileLn("<plist version=\"0.9\">");
-#else
-	if (ide_vers >= 3100) {
-		WriteDestFileLn(
-			"<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\""
-			" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">");
-	} else {
-		WriteDestFileLn(
-			"<!DOCTYPE plist PUBLIC \"-//"
-			"Apple Computer//DTD PLIST 1.0//EN\""
-			" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">");
-	}
+		"<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\""
+		" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">");
 	WriteDestFileLn("<plist version=\"1.0\">");
-#endif
 
 	p();
 

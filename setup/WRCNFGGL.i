@@ -70,36 +70,32 @@ LOCALPROC WriteCommonCNFUIALLContents(void)
 	WriteDestFileLn(
 		"#define MayNotInline __attribute__((noinline))");
 
-	if (CurOfficialBin) {
-		/*
-			ARM64 code generation hints. Still gated on -ob, exactly
-			as before, so an ordinary build is byte for byte what it
-			used to be. Enabling these unconditionally now that a64
-			is the only CPU would be worthwhile, but that is a
-			performance change, not a platform removal.
-		*/
-		WriteDestFileLn("#define BigEndianUnaligned 0");
-		WriteDestFileLn("#define LittleEndianUnaligned 1");
+	/*
+		ARM64 code generation hints. The only host is arm64 clang,
+		so these hold for every build and are no longer gated
+		on -ob.
+	*/
+	WriteDestFileLn("#define BigEndianUnaligned 0");
+	WriteDestFileLn("#define LittleEndianUnaligned 1");
 
-		WriteDestFileLn("#define my_cond_rare(x) "
-			"(__builtin_expect(x, 0))");
-		WriteDestFileLn("#define Have_ASR 1");
+	WriteDestFileLn("#define my_cond_rare(x) "
+		"(__builtin_expect(x, 0))");
+	WriteDestFileLn("#define Have_ASR 1");
 
-		WriteDestFileLn("#define HaveUi6Div 1");
+	WriteDestFileLn("#define HaveUi6Div 1");
 
-		/*
-			No HaveGlbReg (or r_pc_p, see SPOTHRCF.i). A global
-			register variable is only sound if nothing else ever
-			uses that register, but AArch64 has no callee-reserved
-			register to give it: x15 (and every other candidate)
-			is caller-saved scratch that system frameworks, Swift
-			and the compiler's own calls freely clobber, so the
-			emulated pc would be corrupted across any host call.
-		*/
+	/*
+		No HaveGlbReg (or r_pc_p, see SPOTHRCF.i). A global
+		register variable is only sound if nothing else ever
+		uses that register, but AArch64 has no callee-reserved
+		register to give it: x15 (and every other candidate)
+		is caller-saved scratch that system frameworks, Swift
+		and the compiler's own calls freely clobber, so the
+		emulated pc would be corrupted across any host call.
+	*/
 
-		WriteDestFileLn(
-			"#define my_align_8 __attribute__ ((aligned (8)))");
-	}
+	WriteDestFileLn(
+		"#define my_align_8 __attribute__ ((aligned (8)))");
 
 	WriteCompCondBool("SmallGlobals", falseblnr);
 		/* only the 68k hosted build ever wanted small globals */
@@ -160,20 +156,7 @@ LOCALPROC WriteCommonCNFUIALLContents(void)
 	WriteDestFileLn("typedef int si5b;");
 	WriteDestFileLn("#define HaveRealsi5b 1");
 
-	/* 64 bits */ /* this is mostly for illustration, not used */
-#if 0
-	struct ui6b {
-		ui5b f0;
-		ui5b f1;
-	};
-	typedef struct ui6b ui6b;
-
-	struct si6b {
-		ui5b f0;
-		si5b f1;
-	};
-	typedef struct si6b si6b;
-#endif
+	/* 64 bits */ /* real types are emitted by Write64bitConfig */
 	WriteBlankLineToDestFile();
 	WriteDestFileLn("#define HaveRealui6b 0");
 	WriteDestFileLn("#define HaveRealsi6b 0");
@@ -213,14 +196,11 @@ LOCALPROC WriteCommonCNFUIALLContents(void)
 	WriteDestFileLn("typedef si5b si5r;");
 	WriteDestFileLn("#define si5beqr 1");
 
-	if (CurOfficialBin) {
-		/* see the note about -ob above */
-		WriteBlankLineToDestFile();
-		WriteDestFileLn(
-			"#define MySwapUi5r(x)"
-			" ((ui5r)__builtin_bswap32(x))");
-		WriteDestFileLn("#define HaveMySwapUi5r 1");
-	}
+	WriteBlankLineToDestFile();
+	WriteDestFileLn(
+		"#define MySwapUi5r(x)"
+		" ((ui5r)__builtin_bswap32(x))");
+	WriteDestFileLn("#define HaveMySwapUi5r 1");
 }
 
 LOCALPROC Write64bitConfig(void)

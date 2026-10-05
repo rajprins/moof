@@ -27,10 +27,6 @@ LOCALPROC WriteAppSpecificCNFUDALLoptions(void)
 
 	WriteBlankLineToDestFile();
 
-#if 0 /* not used currently */
-	WriteCompCondBool("Debug", gbk_dbg_off != gbo_dbg);
-#endif
-
 	WriteCompCondBool("dbglog_HAVE", DbgLogHAVE);
 
 	WriteCompCondBool("WantAbnormalReports", gbo_AbnormalReports);
