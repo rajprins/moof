@@ -438,45 +438,23 @@ typedef struct {
 #if SCC_TrackMore
 	ui3r StopBits;
 #endif
-#if 0 /* AllSent always true */
-	blnr AllSent;
-#endif
-#if 0 /* CTS always false */
-	blnr CTS; /* input pin, unattached, so false? */
-#endif
-#if 0 /* DCD always false */
-	blnr DCD; /* Data Carrier Detect */
-		/*
-			input pin for mouse interrupts. but since
-			not emulating mouse this way, leave false.
-		*/
-#endif
+	/* AllSent is always true */
+	/* CTS is always false: input pin, unattached */
+	/*
+		DCD (Data Carrier Detect) is always false: input pin for
+		mouse interrupts, but the mouse is not emulated this way.
+	*/
 #if EmLocalTalk
 	/* otherwise RxChrAvail always false */
 	blnr RxChrAvail;
 #endif
-#if 0 /* RxOverrun always false */
-	blnr RxOverrun;
-#endif
-#if 0 /* CRCFramingErr always false */
-	blnr CRCFramingErr;
-#endif
+	/* RxOverrun and CRCFramingErr are always false */
 #if EmLocalTalk
 	/* otherwise EndOfFrame always false */
 	blnr EndOfFrame;
 #endif
-#if 0 /* ParityErr always false */
-	blnr ParityErr;
-#endif
-#if 0 /* ZeroCount always false */
-	blnr ZeroCount;
-#endif
-#if 0 /* BreakAbort always false */
-	blnr BreakAbort;
-#endif
-#if 0 /* SyncHuntIE usually false */
-	blnr SyncHuntIE;
-#endif
+	/* ParityErr, ZeroCount and BreakAbort are always false */
+	/* SyncHuntIE is usually false */
 #if SCC_TrackMore /* don't care about CTS_IE */
 	blnr CTS_IE;
 #endif
@@ -486,9 +464,7 @@ typedef struct {
 #if SCC_TrackMore
 	blnr BRGEnbl;
 #endif
-#if 0 /* don't care about DCD_IE, always true */
-	blnr DCD_IE;
-#endif
+	/* DCD_IE is always true */
 #if SCC_TrackMore /* don't care about BreakAbortIE */
 	blnr BreakAbortIE;
 #endif
@@ -507,17 +483,10 @@ typedef struct {
 #if SCC_TrackMore
 	blnr NoVectorSlct;
 #endif
-#if 0 /* StatusHiLo always false */
-	blnr StatusHiLo;
-#endif
+	/* StatusHiLo is always false */
 } SCC_Ty;
 
 LOCALVAR SCC_Ty SCC;
-
-#if 0
-LOCALVAR int ReadPrint;
-LOCALVAR int ReadModem;
-#endif
 
 #if EmLocalTalk
 LOCALVAR ui5r rx_data_offset = 0;
@@ -537,57 +506,13 @@ EXPORTFUNC blnr SCC_InterruptsEnabled(void)
 /* Function used to update the interrupt state of the SCC */
 LOCALPROC CheckSCCInterruptFlag(void)
 {
-#if 0 /* ReceiveAInterrupt always false */
-	blnr ReceiveAInterrupt = falseblnr
-		/*
-			also dependeds on WR1, bits 3 and 4, but
-			this doesn't change that it's all false
-		*/
-#if EmLocalTalk
-		/* otherwise RxChrAvail always false */
-		| SCC.a[0].RxChrAvail
-#endif
-#if 0 /* RxOverrun always false */
-		| SCC.a[0].RxOverrun
-#endif
-#if 0 /* CRCFramingErr always false */
-		| SCC.a[0].CRCFramingErr
-#endif
-#if EmLocalTalk
-		/* otherwise EndOfFrame always false */
-		| SCC.a[0].EndOfFrame
-#endif
-#if 0 /* ParityErr always false */
-		| SCC.a[0].ParityErr
-#endif
-		;
-#endif
-#if 0
-	blnr TransmitAInterrupt = SCC.a[0].TxBufferEmpty;
 	/*
-		but probably looking for transitions not
-		current value
+		Channel A never raises receive or external/status
+		interrupts: every source (RxChrAvail, RxOverrun,
+		CRCFramingErr, ParityErr, ZeroCount, DCD, CTS, BreakAbort)
+		is constant on this emulated port, and SyncHunt and
+		TxUnderrun have their interrupt enables off.
 	*/
-#endif
-#if 0
-	blnr ExtStatusAInterrupt = 0
-#if 0 /* ZeroCount always false */
-		| SCC.a[0].ZeroCount
-#endif
-		/* probably want transition for these, not value */
-#if 0 /* DCD always false */
-		| SCC.a[0].DCD /* DCD IE always true */
-#endif
-#if 0 /* CTS always false */
-		| SCC.a[0].CTS /* would depend on CTS_IE */
-#endif
-		| SCC.a[0].SyncHunt /* SyncHuntIE usually false */
-		| SCC.a[0].TxUnderrun /* Tx underrun/EOM IE always false */
-#if 0 /* BreakAbort always false */
-		| SCC.a[0].BreakAbort
-#endif
-		;
-#endif
 	ui3b NewSCCInterruptRequest;
 
 #if EmLocalTalk
@@ -626,15 +551,7 @@ LOCALPROC CheckSCCInterruptFlag(void)
 	if (! SCC.MIE) {
 		SCC.SCC_Interrupt_Type = 0;
 	} else
-#if 0
-	/* External Interrupt Enable */
-	if (SCC.a[1].ExtIE) {
-		/* DCD Interrupt Enable */
-		if (SCC.a[1].DCD_IE && 0) { /* dcd unchanged */
-			SCC.SCC_Interrupt_Type = ??;
-		}
-	}
-#endif
+	/* no channel B external interrupt: DCD never changes */
 	if (SCC.a[0].TxIP && SCC.a[0].TxIE) {
 		SCC.SCC_Interrupt_Type = SCC_A_Tx_Empty;
 	} else
@@ -676,22 +593,13 @@ LOCALPROC SCC_InitChannel(int chan)
 	/* anything not done by ResetChannel */
 
 	SCC.a[chan].SyncHunt = trueblnr;
-#if 0 /* DCD always false */
-	SCC.a[chan].DCD = falseblnr; /* input pin, reset doesn't change */
-#endif
-#if 0 /* CTS always false */
-	SCC.a[chan].CTS = falseblnr; /* input pin, reset doesn't change */
-#endif
-#if 0 /* AllSent always true */
-	SCC.a[chan].AllSent = trueblnr;
-#endif
+	/* DCD and CTS are input pins, unchanged by reset: always false */
+	/* AllSent always true */
 #if SCC_TrackMore /* don't care about Baud */
 	SCC.a[chan].BaudLo = 0;
 	SCC.a[chan].BaudHi = 0;
 #endif
-#if 0 /* BreakAbort always false */
-	SCC.a[chan].BreakAbort = falseblnr;
-#endif
+	/* BreakAbort always false */
 #if SCC_TrackMore
 	SCC.a[chan].BRGEnbl = falseblnr;
 #endif
@@ -716,24 +624,14 @@ LOCALPROC SCC_ResetChannel(int chan)
 	/* otherwise RxChrAvail always false */
 	SCC.a[chan].RxChrAvail = falseblnr;
 #endif
-#if 0 /* ZeroCount always false */
-	SCC.a[chan].ZeroCount = falseblnr;
-#endif
+	/* ZeroCount always false */
 #if EmLocalTalk
 	/* otherwise TxBufferEmpty always true */
 	SCC.a[chan].TxBufferEmpty = trueblnr;
 #endif
 	SCC.a[chan].TxUnderrun = trueblnr;
 /* RR 1 */
-#if 0 /* ParityErr always false */
-	SCC.a[chan].ParityErr = falseblnr;
-#endif
-#if 0 /* RxOverrun always false */
-	SCC.a[chan].RxOverrun = falseblnr;
-#endif
-#if 0 /* CRCFramingErr always false */
-	SCC.a[chan].CRCFramingErr = falseblnr;
-#endif
+	/* ParityErr, RxOverrun and CRCFramingErr always false */
 #if EmLocalTalk
 	/* otherwise EndOfFrame always false */
 	SCC.a[chan].EndOfFrame = falseblnr;
@@ -817,31 +715,19 @@ LOCALPROC SCC_ResetChannel(int chan)
 	SCC.a[chan].RxEnable = falseblnr;
 	SCC.a[chan].TxIE = falseblnr;
 
-#if 0 /* don't care about DCD_IE, always true */
-	SCC.a[chan].DCD_IE = trueblnr;
-#endif
+	/* DCD_IE always true */
 #if SCC_TrackMore /* don't care about CTS_IE */
 	SCC.a[chan].CTS_IE = trueblnr;
 #endif
 #if SCC_TrackMore
 	SCC.a[chan].CRCPreset = falseblnr;
 #endif
-#if 0 /* SyncHuntIE usually false */
-	SCC.a[chan].SyncHuntIE = trueblnr;
-#endif
+	/* SyncHuntIE: reset would set it, but it is usually false */
 #if SCC_TrackMore /* don't care about BreakAbortIE */
 	SCC.a[chan].BreakAbortIE = trueblnr;
 #endif
 
 	SCC.PointerBits = 0;
-
-#if 0
-	if (0 != chan) {
-		ReadPrint = 0;
-	} else {
-		ReadModem = 0;
-	}
-#endif
 }
 
 GLOBALPROC SCC_Reset(void)
@@ -854,9 +740,7 @@ GLOBALPROC SCC_Reset(void)
 	SCC.PointerBits = 0;
 	SCC.MIE = falseblnr;
 	SCC.InterruptVector = 0;
-#if 0 /* StatusHiLo always false */
-	SCC.StatusHiLo = falseblnr;
-#endif
+	/* StatusHiLo always false */
 
 	SCC_InitChannel(1);
 	SCC_InitChannel(0);
@@ -968,128 +852,6 @@ GLOBALPROC LocalTalkTick(void)
 #endif
 
 
-#if 0
-LOCALPROC SCC_Interrupt(int Type)
-{
-	if (SCC.MIE) { /* Master Interrupt Enable */
-
-		if (Type > SCC.SCC_Interrupt_Type) {
-			SCC.SCC_Interrupt_Type = Type;
-		}
-
-		CheckSCCInterruptFlag();
-	}
-}
-#endif
-
-#if 0
-LOCALPROC SCC_Int(void)
-{
-	/* This should be called at regular intervals */
-
-	/* Turn off Sync/Hunt Mode */
-	if (SCC.a[0].SyncHunt) {
-		SCC.a[0].SyncHunt = falseblnr;
-
-#ifdef _SCC_Debug2
-		vMac_Message("SCC_Int: Disable Sync/Hunt on A");
-#endif
-
-#if 0 /* SyncHuntIE usually false */
-		if (SCC.a[0].SyncHuntIE) {
-			SCC_Interrupt(SCC_A_Ext);
-		}
-#endif
-	}
-	if (SCC.a[1].SyncHunt) {
-		SCC.a[1].SyncHunt = falseblnr;
-
-#ifdef _SCC_Debug2
-		vMac_Message("SCC_Int: Disable Sync/Hunt on B");
-#endif
-
-#if 0 /* SyncHuntIE usually false */
-		if (SCC.a[1].SyncHuntIE) {
-			SCC_Interrupt(SCC_B_Ext);
-		}
-#endif
-	}
-
-#if 0
-	/* Check for incoming data */
-	if (ModemPort)
-	{
-		if (! SCC.a[0].RxEnable) { /* Rx Disabled */
-			ReadModem = 0;
-		}
-
-		if ((ModemBytes > 0) && (ModemCount > ModemBytes - 1))
-		{
-			SCC.a[0].RxChrAvail = falseblnr;
-			ReadModem = ModemBytes = ModemCount = 0;
-		}
-
-		if (ReadModem) {
-			ReadModem = 2;
-
-			SCC.a[0].RxChrAvail = trueblnr;
-
-			if (SCC.a[0].WR[0] & Bit5
-				&& ! (SCC.a[0].WR[0] & (Bit4 | Bit3)))
-			{
-				/* Int on next Rx char */
-				SCC_Interrupt(SCC_A_Rx);
-			} else if (SCC.a[0].WR[1] & Bit3
-				&& ! (SCC.a[0].WR[1] & Bit4))
-			{
-				/* Int on first Rx char */
-				SCC_Interrupt(SCC_A_Rx);
-			} else if (SCC.a[0].WR[1] & Bit4
-				&& ! (SCC.a[0].WR[1] & Bit3))
-			{
-				/* Int on all Rx chars */
-				SCC_Interrupt(SCC_A_Rx);
-			}
-		}
-	}
-	if (PrintPort) {
-		if (! SCC.a[1].RxEnable) {
-			/* Rx Disabled */
-			ReadPrint = 0;
-		}
-
-		if ((PrintBytes > 0) && (PrintCount > PrintBytes - 1)) {
-			SCC.a[1].RxChrAvail = falseblnr;
-			ReadPrint = PrintBytes = PrintCount = 0;
-		}
-
-		if (ReadPrint) {
-			ReadPrint = 2;
-
-			SCC.a[1].RxChrAvail = trueblnr;
-
-			if (SCC.a[1].WR[0] & Bit5
-				&& ! (SCC.a[1].WR[0] & (Bit4 | Bit3)))
-			{
-				/* Int on next Rx char */
-				SCC_Interrupt(SCC_B_Rx);
-			} else if (SCC.a[1].WR[1] & Bit3
-				&& ! (SCC.a[1].WR[1] & Bit4))
-			{
-				/* Int on first Rx char */
-				SCC_Interrupt(SCC_B_Rx);
-			} else if (SCC.a[1].WR[1] & Bit4
-				&& ! (SCC.a[1].WR[1] & Bit3))
-			{
-				/* Int on all Rx chars */
-				SCC_Interrupt(SCC_B_Rx);
-			}
-		}
-	}
-#endif
-}
-#endif
-
 #if SCC_dolog
 LOCALPROC SCC_DbgLogChanStartLine(int chan)
 {
@@ -1110,26 +872,18 @@ LOCALFUNC ui3r SCC_GetRR0(int chan)
 	/* happens on boot always */
 
 	return 0
-#if 0 /* BreakAbort always false */
-		| (SCC.a[chan].BreakAbort ? (1 << 7) : 0)
-#endif
+		/* bit 7: BreakAbort always false */
 		| (SCC.a[chan].TxUnderrun ? (1 << 6) : 0)
-#if 0 /* CTS always false */
-		| (SCC.a[chan].CTS ? (1 << 5) : 0)
-#endif
+		/* bit 5: CTS always false */
 		| (SCC.a[chan].SyncHunt ? (1 << 4) : 0)
-#if 0 /* DCD always false */
-		| (SCC.a[chan].DCD ? (1 << 3) : 0)
-#endif
+		/* bit 3: DCD always false */
 #if EmLocalTalk
 		| (SCC.a[chan].TxBufferEmpty ? (1 << 2) : 0)
 #else
 		/* otherwise TxBufferEmpty always true */
 		| (1 << 2)
 #endif
-#if 0 /* ZeroCount always false */
-		| (SCC.a[chan].ZeroCount ? (1 << 1) : 0)
-#endif
+		/* bit 1: ZeroCount always false */
 #if EmLocalTalk
 		/* otherwise RxChrAvail always false */
 		| (SCC.a[chan].RxChrAvail ? (1 << 0) : 0)
@@ -1147,20 +901,10 @@ LOCALFUNC ui3r SCC_GetRR1(int chan)
 #endif
 
 	value = Bit2 | Bit1
-#if 0 /* AllSent always true */
-		| (SCC.a[chan].AllSent ? (1 << 0) : 0)
-#else
-		| Bit0
-#endif
-#if 0 /* ParityErr always false */
-		| (SCC.a[chan].ParityErr ? (1 << 4) : 0)
-#endif
-#if 0 /* RxOverrun always false */
-		| (SCC.a[chan].RxOverrun ? (1 << 5) : 0)
-#endif
-#if 0 /* CRCFramingErr always false */
-		| (SCC.a[chan].CRCFramingErr ? (1 << 6) : 0)
-#endif
+		| Bit0 /* AllSent always true */
+		/* bit 4: ParityErr always false */
+		/* bit 5: RxOverrun always false */
+		/* bit 6: CRCFramingErr always false */
 #if EmLocalTalk
 		/* otherwise EndOfFrame always false */
 		| (SCC.a[chan].EndOfFrame ? (1 << 7) : 0)
@@ -1178,52 +922,11 @@ LOCALFUNC ui3r SCC_GetRR2(int chan)
 	ui3r value = SCC.InterruptVector;
 
 	if (0 != chan) { /* B Channel */
-#if 0 /* StatusHiLo always false */
-		if (SCC.StatusHiLo) {
-			/* Status High */
-			value = value
-				& (Bit0 | Bit1 | Bit2 | Bit3 | Bit7);
-
-			ReportAbnormalID(0x0705, "Status high/low");
-			switch (SCC.SCC_Interrupt_Type) {
-				case SCC_A_Rx:
-					value |= Bit4 | Bit5;
-					break;
-
-				case SCC_A_Rx_Spec:
-					value |= Bit4 | Bit5 | Bit6;
-					break;
-
-				case SCC_A_Tx_Empty:
-					value |= Bit4;
-					break;
-
-				case SCC_A_Ext:
-					value |= Bit4 | Bit6;
-					break;
-
-				case SCC_B_Rx:
-					value |= Bit5;
-					break;
-
-				case SCC_B_Rx_Spec:
-					value |= Bit5 | Bit6;
-					break;
-
-				case SCC_B_Tx_Empty:
-					value |= 0;
-					break;
-
-				case SCC_B_Ext:
-					value |= Bit6;
-					break;
-
-				default:
-					value |= Bit5 | Bit6;
-					break;
-			}
-		} else
-#endif
+		/*
+			StatusHiLo is always false (WR9 bit 4 is reported as
+			abnormal). With Status High the interrupt type would be
+			encoded in bits 4-6 instead of bits 1-3.
+		*/
 		{
 			/* Status Low */
 			value = value
@@ -1281,16 +984,7 @@ LOCALFUNC ui3r SCC_GetRR3(int chan)
 	UnusedParam(chan);
 	ReportAbnormalID(0x0706, "RR 3");
 
-#if 0
-	if (chan == 0) {
-		value = 0
-			| (SCC.a[1].TxIP ? (1 << 1) : 0)
-			| (SCC.a[0].TxIP ? (1 << 4) : 0)
-			;
-	} else {
-		value = 0;
-	}
-#endif
+	/* on channel A this would report TxIP of B in bit 1, A in bit 4 */
 
 	return value;
 }
@@ -1338,10 +1032,6 @@ LOCALFUNC ui3r SCC_GetRR10(int chan)
 	ui3r value = 0;
 	UnusedParam(chan);
 
-#if 0 && EmLocalTalk
-	value = 2;
-#endif
-
 	return value;
 }
 
@@ -1384,24 +1074,11 @@ LOCALFUNC ui3r SCC_GetRR15(int chan)
 	UnusedParam(chan);
 	ReportAbnormalID(0x070A, "RR 15");
 
-#if 0
-	value = 0
-#if 0 /* don't care about DCD_IE, always true */
-		| (SCC.a[chan].DCD_IE ? Bit3 : 0)
-#else
-		| Bit3
-#endif
-#if 0 /* SyncHuntIE usually false */
-		| (SCC.a[chan].SyncHuntIE ? Bit4 : 0)
-#endif
-#if SCC_TrackMore /* don't care about CTS_IE */
-		| (SCC.a[chan].CTS_IE ? Bit5 : 0)
-#endif
-#if SCC_TrackMore /* don't care about BreakAbortIE */
-		| (SCC.a[chan].BreakAbortIE ? Bit7 : 0)
-#endif
-		;
-#endif
+	/*
+		This would echo the WR15 interrupt enables: DCD_IE (always
+		true) in bit 3, SyncHuntIE in bit 4, CTS_IE in bit 5 and
+		BreakAbortIE in bit 7.
+	*/
 
 	return value;
 }
@@ -1463,23 +1140,12 @@ LOCALPROC SCC_PutWR0(ui3r Data, int chan)
 				LT_TransmitPacket1();
 			}
 #endif
-#if 0 /* It seems to work better without this */
-			if (SCC.a[chan].TxEnable) {
-				/* Tx Enabled */
-				SCC.a[chan].TxUnderrun = falseblnr;
-
-				if (SCC.a[chan].WR[10] & Bit2) {
-					/* Abort/Flag on Underrun */
-					/* Send Abort */
-					SCC.a[chan].TxUnderrun = trueblnr;
-#if 0 /* TxBufferEmpty always true */
-					SCC.a[chan].TxBufferEmpty = trueblnr;
-#endif
-
-					/* Send Flag */
-				}
-			}
-#endif
+			/*
+				Clearing TxUnderrun here when Tx is enabled (and
+				setting it again when WR10 bit 2, Abort/Flag on
+				Underrun, is set) seems to work worse, so it is
+				left alone.
+			*/
 			break;
 		case 0:
 		default:
@@ -1497,26 +1163,13 @@ LOCALPROC SCC_PutWR0(ui3r Data, int chan)
 #endif
 			/* happens on boot always */
 			SCC.a[chan].SyncHunt = falseblnr;
-#if 0 /* only in sync mode */
-			SCC.a[chan].TxUnderrun = falseblnr;
-#endif
-#if 0 /* ZeroCount always false */
-			SCC.a[chan].ZeroCount = falseblnr;
-#endif
-#if 0 /* BreakAbort always false */
-			SCC.a[chan].BreakAbort = falseblnr;
-#endif
+			/* TxUnderrun would be cleared too, but only in sync mode */
+			/* ZeroCount and BreakAbort always false */
 			break;
 		case 3:
 			ReportAbnormalID(0x070C, "Send Abort (SDLC)");
 #if EmLocalTalk
 			SCC.a[chan].TxBufferEmpty = trueblnr;
-#endif
-#if 0
-			SCC.a[chan].TxUnderrun = trueblnr;
-#if 0 /* TxBufferEmpty always true */
-			SCC.a[chan].TxBufferEmpty = trueblnr;
-#endif
 #endif
 			break;
 		case 4:
@@ -1546,15 +1199,7 @@ LOCALPROC SCC_PutWR0(ui3r Data, int chan)
 #if EmLocalTalk
 			SCC.a[chan].EndOfFrame = falseblnr;
 #endif
-#if 0 /* ParityErr always false */
-			SCC.a[chan].ParityErr = falseblnr;
-#endif
-#if 0 /* RxOverrun always false */
-			SCC.a[chan].RxOverrun = falseblnr;
-#endif
-#if 0 /* CRCFramingErr always false */
-			SCC.a[chan].CRCFramingErr = falseblnr;
-#endif
+			/* ParityErr, RxOverrun and CRCFramingErr always false */
 			break;
 		case 7:
 			/* happens in "Network Watch" program (Cayman Systems) */
@@ -1810,14 +1455,7 @@ LOCALPROC SCC_PutWR3(ui3r Data, int chan)
 		/* happens on boot with appletalk on */
 		if (! (SCC.a[chan].SyncHunt)) {
 			SCC.a[chan].SyncHunt = trueblnr;
-
-#if 0 /* SyncHuntIE usually false */
-			if (SCC.a[chan].SyncHuntIE) {
-				SCC_Interrupt((chan == 0)
-					? SCC_A_Ext
-					: SCC_B_Ext);
-			}
-#endif
+			/* no Ext interrupt: SyncHuntIE is usually false */
 		}
 	}
 
@@ -2244,9 +1882,7 @@ LOCALPROC SCC_PutWR8(ui3r Data, int chan)
 			SCC_TxBuffPut(Data);
 		}
 #else
-#if 0 /* TxBufferEmpty always true */
-		SCC.a[chan].TxBufferEmpty = trueblnr;
-#endif
+		/* TxBufferEmpty always true */
 		SCC.a[chan].TxUnderrun = trueblnr; /* underrun ? */
 #endif
 
@@ -2255,9 +1891,7 @@ LOCALPROC SCC_PutWR8(ui3r Data, int chan)
 	} else {
 		ReportAbnormalID(0x071F,
 			"write when Transmit Buffer not Enabled");
-#if 0 /* TxBufferEmpty always true */
-		SCC.a[chan].TxBufferEmpty = falseblnr;
-#endif
+		/* TxBufferEmpty stays true */
 	}
 }
 
@@ -2306,13 +1940,10 @@ LOCALPROC SCC_PutWR9(ui3r Data, int chan)
 		}
 	}
 
-#if 0 /* StatusHiLo always false */
-	SCC.StatusHiLo = (Data & Bit4) != 0;
-#else
+	/* StatusHiLo is not tracked, always false */
 	if ((Data & Bit4) != 0) { /* Status high/low */
 		ReportAbnormalID(0x0724, "Status high/low");
 	}
-#endif
 	if ((Data & Bit5) != 0) { /* WR9 b5 should be 0 */
 		ReportAbnormalID(0x0725, "WR9 b5 should be 0");
 	}
@@ -2578,18 +2209,11 @@ LOCALPROC SCC_PutWR12(ui3r Data, int chan)
 	}
 #endif
 
-#if 0
-	SCC_SetBaud(chan,
-		SCC.a[chan].BaudLo + (SCC.a[chan].BaudHi << 8));
-		/* 380: BaudRate = 300   */
-		/*  94: BaudRate = 1200  */
-		/*  46: BaudRate = 2400  */
-		/*  22: BaudRate = 4800  */
-		/*  10: BaudRate = 9600  */
-		/*   4: BaudRate = 19200 */
-		/*   1: BaudRate = 38400 */
-		/*   0: BaudRate = 57600 */
-#endif
+	/*
+		The baud rate is not acted on. Time constant to baud rate:
+		380 = 300, 94 = 1200, 46 = 2400, 22 = 4800, 10 = 9600,
+		4 = 19200, 1 = 38400, 0 = 57600.
+	*/
 }
 
 LOCALPROC SCC_PutWR13(ui3r Data, int chan)
@@ -2616,10 +2240,7 @@ LOCALPROC SCC_PutWR13(ui3r Data, int chan)
 	}
 #endif
 
-#if 0
-	SCC_SetBaud(chan,
-		SCC.a[chan].BaudLo + (SCC.a[chan].BaudHi << 8));
-#endif
+	/* the baud rate is not acted on, see SCC_PutWR12 */
 }
 
 LOCALPROC SCC_PutWR14(ui3r Data, int chan)
@@ -2725,9 +2346,7 @@ LOCALPROC SCC_PutWR15(ui3r Data, int chan)
 		ReportAbnormalID(0x0740, "WR15 b2 should be 0");
 	}
 
-#if 0 /* don't care about DCD_IE, always true */
-	SCC.a[chan].DCD_IE = (Data & Bit3) != 0;
-#else
+	/* DCD_IE is not tracked, always true */
 	if ((Data & Bit3) == 0) { /* DCD_IE */
 #if (CurEmMd >= kEmMd_SE) && (CurEmMd <= kEmMd_IIx)
 		/* don't report */
@@ -2735,16 +2354,12 @@ LOCALPROC SCC_PutWR15(ui3r Data, int chan)
 		ReportAbnormalID(0x0741, "not DCD IE");
 #endif
 	}
-#endif
 
-#if 0 /* SyncHuntIE usually false */
-	SCC.a[chan].SyncHuntIE = (Data & Bit4) != 0;
-#else
+	/* SyncHuntIE is not tracked, usually false */
 	if ((Data & Bit4) != 0) {
 		/* SYNC/HUNT IE */
 		ReportAbnormalID(0x0742, "SYNC/HUNT IE");
 	}
-#endif
 
 #if SCC_TrackMore /* don't care about CTS_IE */
 	{
