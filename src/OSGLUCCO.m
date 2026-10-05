@@ -31,11 +31,6 @@
 
 /* --- adapting to API/ABI version differences --- */
 
-
-#ifndef WantGraphicsSwitching
-#define WantGraphicsSwitching 0
-#endif
-
 /*
 	Everything that used to be looked up dynamically through CFBundle
 	here -- CFURLCopyResourcePropertyForKey, kCFURLIsAliasFileKey,
@@ -133,13 +128,6 @@ LOCALPROC SetSpeedValue(ui3b i)
 }
 
 /* --- swift bridge --- */
-
-/*
-	Implementation of the narrow C surface declared in EMUCTLAP.h.
-	It lives here because SpeedValue and SetSpeedValue are part of
-	this translation unit, reached through the unity build includes
-	above.
-*/
 
 #include "EMUCTLAP.h"
 #import "MTLRENDR.h"
@@ -488,14 +476,6 @@ LOCALFUNC blnr MacRomanFileNameToNSString(tPbuf i,
 			}
 		}
 
-#if 0
-		*p1 = 0;
-		*r = [NSString stringWithCString:(char *)p
-			encoding:NSMacOSRomanStringEncoding];
-			/* only as of OS X 10.4 */
-		free(p);
-#endif
-
 		d = [[NSData alloc] initWithBytesNoCopy:p length:L];
 
 		*r = [[[NSString alloc]
@@ -512,19 +492,13 @@ LOCALFUNC blnr MacRomanFileNameToNSString(tPbuf i,
 #endif
 
 #if IncludeSonyGetName || IncludeHostTextClipExchange
+/*
+	The NSData is autoreleased; both callers, vSonyGetName and
+	HTCEimport, have a pool in place.
+*/
 LOCALFUNC tMacErr NSStringToRomanPbuf(NSString *string, tPbuf *r)
 {
 	tMacErr v = mnvm_miscErr;
-	NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
-#if 0
-	const char *s = [s0
-		cStringUsingEncoding: NSMacOSRomanStringEncoding];
-	ui5r L = strlen(s);
-		/* only as of OS X 10.4 */
-#endif
-#if 0
-	NSData *d0 = [string dataUsingEncoding: NSMacOSRomanStringEncoding];
-#endif
 	NSData *d0 = [string dataUsingEncoding: NSMacOSRomanStringEncoding
 		allowLossyConversion: YES];
 	const void *s = [d0 bytes];
@@ -556,8 +530,6 @@ LOCALFUNC tMacErr NSStringToRomanPbuf(NSString *string, tPbuf *r)
 		}
 	}
 
-	[pool release];
-
 	return v;
 }
 #endif
@@ -568,19 +540,6 @@ LOCALFUNC blnr FindNamedChildPath(NSString *parentPath,
 	char *ChildName, NSString **childPath)
 {
 	blnr v = falseblnr;
-
-#if 0
-	NSString *ss = [NSString stringWithCString:s
-		encoding:NSASCIIStringEncoding];
-		/* only as of OS X 10.4 */
-#endif
-#if 0
-	NSData *d = [NSData dataWithBytes: ChildName
-		length: strlen(ChildName)];
-	NSString *ss = [[[NSString alloc]
-		initWithData:d encoding:NSASCIIStringEncoding]
-		autorelease];
-#endif
 	NSString *ss = NSStringCreateFromSubstCStr(ChildName);
 	if (nil != ss) {
 		NSString *r = [parentPath stringByAppendingPathComponent: ss];
@@ -800,36 +759,17 @@ GLOBALOSGLUFUNC tMacErr vSonyGetSize(tDrive Drive_No, ui5r *Sony_Count)
 	return err; /*& figure out what really to return &*/
 }
 
-#ifndef HaveAdvisoryLocks
-#define HaveAdvisoryLocks 1
-#endif
-
 /*
-	What is the difference between fcntl(fd, F_SETLK ...
-	and flock(fd ... ?
+	Advisory locks on the image files, so that two copies of the
+	emulator do not write into the same disk image at once. flock
+	rather than fcntl: a whole file lock is all that is needed, and
+	flock's lock belongs to the open file rather than the process,
+	so it is released when the image is closed.
 */
 
-#if HaveAdvisoryLocks
 LOCALFUNC blnr MyLockFile(FILE *refnum)
 {
 	blnr IsOk = falseblnr;
-
-#if 0
-	struct flock fl;
-	int fd = fileno(refnum);
-
-	fl.l_start = 0; /* starting offset */
-	fl.l_len = 0; /* len = 0 means until end of file */
-	/* fl.pid_t l_pid; */ /* lock owner, don't need to set */
-	fl.l_type = F_WRLCK; /* lock type: read/write, etc. */
-	fl.l_whence = SEEK_SET; /* type of l_start */
-	if (-1 == fcntl(fd, F_SETLK, &fl)) {
-		MacMsg(kStrImageInUseTitle, kStrImageInUseMessage,
-			falseblnr);
-	} else {
-		IsOk = trueblnr;
-	}
-#else
 	int fd = fileno(refnum);
 
 	if (-1 == flock(fd, LOCK_EX | LOCK_NB)) {
@@ -849,35 +789,16 @@ LOCALFUNC blnr MyLockFile(FILE *refnum)
 	} else {
 		IsOk = trueblnr;
 	}
-#endif
 
 	return IsOk;
 }
-#endif
 
-#if HaveAdvisoryLocks
 LOCALPROC MyUnlockFile(FILE *refnum)
 {
-#if 0
-	struct flock fl;
 	int fd = fileno(refnum);
 
-	fl.l_start = 0; /* starting offset */
-	fl.l_len = 0; /* len = 0 means until end of file */
-	/* fl.pid_t l_pid; */ /* lock owner, don't need to set */
-	fl.l_type = F_UNLCK;     /* lock type: read/write, etc. */
-	fl.l_whence = SEEK_SET;   /* type of l_start */
-	if (-1 == fcntl(fd, F_SETLK, &fl)) {
-		/* an error occurred */
-	}
-#else
-	int fd = fileno(refnum);
-
-	if (-1 == flock(fd, LOCK_UN)) {
-	}
-#endif
+	(void) flock(fd, LOCK_UN);
 }
-#endif
 
 LOCALFUNC tMacErr vSonyEject0(tDrive Drive_No, blnr deleteit)
 {
@@ -885,9 +806,7 @@ LOCALFUNC tMacErr vSonyEject0(tDrive Drive_No, blnr deleteit)
 
 	DiskEjectedNotify(Drive_No);
 
-#if HaveAdvisoryLocks
 	MyUnlockFile(refnum);
-#endif
 
 	fclose(refnum);
 	Drives[Drive_No] = NotAfileRef; /* not really needed */
@@ -941,6 +860,11 @@ GLOBALOSGLUFUNC tMacErr vSonyGetName(tDrive Drive_No, tPbuf *r)
 	tMacErr v = mnvm_miscErr;
 	NSString *filePath = DriveNames[Drive_No];
 	if (NULL != filePath) {
+		/*
+			This runs on the emulator thread, which has no pool of
+			its own, and both lastPathComponent and the NSData in
+			NSStringToRomanPbuf are autoreleased.
+		*/
 		NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
 		NSString *s0 = [filePath lastPathComponent];
 		v = NSStringToRomanPbuf(s0, r);
@@ -1004,10 +928,7 @@ LOCALFUNC blnr Sony_Insert0(FILE *refnum, blnr locked,
 	} else {
 		/* printf("Sony_Insert0 %d\n", (int)Drive_No); */
 
-#if HaveAdvisoryLocks
-		if (locked || MyLockFile(refnum))
-#endif
-		{
+		if (locked || MyLockFile(refnum)) {
 			Drives[Drive_No] = refnum;
 			DiskInsertNotify(Drive_No, locked);
 
@@ -1200,11 +1121,6 @@ LOCALFUNC tMacErr LoadMacRomFrom(NSString *parentPath)
 	return err;
 }
 
-LOCALFUNC tMacErr LoadMacRomFromAppDir(void)
-{
-	return LoadMacRomFrom(MyDataPath);
-}
-
 LOCALFUNC tMacErr LoadMacRomFromPrefDir(void)
 {
 	NSString *PrefsPath;
@@ -1251,7 +1167,7 @@ LOCALFUNC blnr LoadMacRom(void)
 {
 	tMacErr err;
 
-	if (mnvm_fnfErr == (err = LoadMacRomFromAppDir()))
+	if (mnvm_fnfErr == (err = LoadMacRomFrom(MyDataPath)))
 	if (mnvm_fnfErr == (err = LoadMacRomFromPrefDir()))
 	if (mnvm_fnfErr == (err = LoadMacRomFromGlobalDir()))
 	{
@@ -1465,15 +1381,6 @@ LOCALVAR NSWindow *MyWindow = nil;
 LOCALVAR NSView *MyNSview = nil;
 
 LOCALVAR blnr HaveRenderer = falseblnr;
-LOCALVAR short GLhOffset;
-LOCALVAR short GLvOffset;
-	/*
-		Offsets of the upper left point of the drawing area. These
-		no longer take part in drawing, since the Metal renderer
-		expresses position through texture coordinates, but hOffset
-		and vOffset are still derived from them for full screen
-		positioning and mouse mapping.
-	*/
 
 
 LOCALPROC MyHideCursor(void)
@@ -1487,18 +1394,11 @@ LOCALPROC MyShowCursor(void)
 		[MyWindow invalidateCursorRectsForView:
 			MyNSview];
 	}
-#if 0
-	[cursor->nscursor performSelectorOnMainThread: @selector(set)
-		withObject: nil waitUntilDone: NO];
-#endif
-#if 0
-	[[NSCursor arrowCursor] set];
-#endif
 	[NSCursor unhide];
 }
 
 #if EnableMoveMouse
-LOCALFUNC CGPoint QZ_PrivateSDLToCG(NSPoint *p)
+LOCALFUNC CGPoint MyViewPointToCG(NSPoint *p)
 {
 	CGPoint cgp;
 
@@ -1514,7 +1414,7 @@ LOCALFUNC CGPoint QZ_PrivateSDLToCG(NSPoint *p)
 }
 #endif
 
-LOCALPROC QZ_GetMouseLocation(NSPoint *p)
+LOCALPROC MyGetMouseLocation(NSPoint *p)
 {
 	/* incorrect while window is being dragged */
 
@@ -1556,70 +1456,70 @@ LOCALPROC MyUpdateKeyboardModifiers(NSUInteger newMods)
 
 	if (0 != changeMask) {
 		if (0 != (changeMask & NSEventModifierFlagCapsLock)) {
-			Keyboard_UpdateKeyMap2(MKC_formac_CapsLock,
+			Keyboard_UpdateKeyMap(MKC_formac_CapsLock,
 				0 != (newMods & NSEventModifierFlagCapsLock));
 		}
 
 #if MKC_formac_RShift == MKC_formac_Shift
 		if (0 != (changeMask & NSEventModifierFlagShift)) {
-			Keyboard_UpdateKeyMap2(MKC_formac_Shift,
+			Keyboard_UpdateKeyMap(MKC_formac_Shift,
 				0 != (newMods & NSEventModifierFlagShift));
 		}
 #else
 		if (0 != (changeMask & My_NSLShiftKeyMask)) {
-			Keyboard_UpdateKeyMap2(MKC_formac_Shift,
+			Keyboard_UpdateKeyMap(MKC_formac_Shift,
 				0 != (newMods & My_NSLShiftKeyMask));
 		}
 		if (0 != (changeMask & My_NSRShiftKeyMask)) {
-			Keyboard_UpdateKeyMap2(MKC_formac_RShift,
+			Keyboard_UpdateKeyMap(MKC_formac_RShift,
 				0 != (newMods & My_NSRShiftKeyMask));
 		}
 #endif
 
 #if MKC_formac_RControl == MKC_formac_Control
 		if (0 != (changeMask & NSEventModifierFlagControl)) {
-			Keyboard_UpdateKeyMap2(MKC_formac_Control,
+			Keyboard_UpdateKeyMap(MKC_formac_Control,
 				0 != (newMods & NSEventModifierFlagControl));
 		}
 #else
 		if (0 != (changeMask & My_NSLControlKeyMask)) {
-			Keyboard_UpdateKeyMap2(MKC_formac_Control,
+			Keyboard_UpdateKeyMap(MKC_formac_Control,
 				0 != (newMods & My_NSLControlKeyMask));
 		}
 		if (0 != (changeMask & My_NSRControlKeyMask)) {
-			Keyboard_UpdateKeyMap2(MKC_formac_RControl,
+			Keyboard_UpdateKeyMap(MKC_formac_RControl,
 				0 != (newMods & My_NSRControlKeyMask));
 		}
 #endif
 
 #if MKC_formac_RCommand == MKC_formac_Command
 		if (0 != (changeMask & NSEventModifierFlagCommand)) {
-			Keyboard_UpdateKeyMap2(MKC_formac_Command,
+			Keyboard_UpdateKeyMap(MKC_formac_Command,
 				0 != (newMods & NSEventModifierFlagCommand));
 		}
 #else
 		if (0 != (changeMask & My_NSLCommandKeyMask)) {
-			Keyboard_UpdateKeyMap2(MKC_formac_Command,
+			Keyboard_UpdateKeyMap(MKC_formac_Command,
 				0 != (newMods & My_NSLCommandKeyMask));
 		}
 		if (0 != (changeMask & My_NSRCommandKeyMask)) {
-			Keyboard_UpdateKeyMap2(MKC_formac_RCommand,
+			Keyboard_UpdateKeyMap(MKC_formac_RCommand,
 				0 != (newMods & My_NSRCommandKeyMask));
 		}
 #endif
 
 #if MKC_formac_ROption == MKC_formac_Option
 		if (0 != (changeMask & NSEventModifierFlagOption)) {
-			Keyboard_UpdateKeyMap2(MKC_formac_Option,
+			Keyboard_UpdateKeyMap(MKC_formac_Option,
 				0 != (newMods & NSEventModifierFlagOption));
 		}
 #else
 		if (0 != (changeMask & My_NSLOptionKeyMask)) {
-			Keyboard_UpdateKeyMap2(MKC_formac_Option,
+			Keyboard_UpdateKeyMap(MKC_formac_Option,
 				0 != (newMods & My_NSLOptionKeyMask));
 		}
 		if (0 != (changeMask & My_NSROptionKeyMask)) {
-			Keyboard_UpdateKeyMap2(MKC_formac_ROption,
+			Keyboard_UpdateKeyMap(MKC_formac_ROption,
 				0 != (newMods & My_NSROptionKeyMask));
 		}
 #endif
@@ -1655,12 +1555,6 @@ LOCALVAR blnr UseMagnify = (0 != WantInitMagnify);
 
 LOCALVAR blnr gBackgroundFlag = falseblnr;
 LOCALVAR blnr CurSpeedStopped = trueblnr;
-
-#if EnableMagnify
-#define MaxScale MyWindowScale
-#else
-#define MaxScale 1
-#endif
 
 LOCALVAR blnr HaveCursorHidden = falseblnr;
 
@@ -1708,7 +1602,7 @@ LOCALFUNC blnr MyMoveMouse(si4b h, si4b v)
 #endif
 
 	p = NSMakePoint(h, v);
-	cgp = QZ_PrivateSDLToCG(&p);
+	cgp = MyViewPointToCG(&p);
 
 	/*
 		this is the magic call that fixes cursor "freezing"
@@ -1717,15 +1611,6 @@ LOCALFUNC blnr MyMoveMouse(si4b h, si4b v)
 	CGAssociateMouseAndMouseCursorPosition(0);
 	CGWarpMouseCursorPosition(cgp);
 	CGAssociateMouseAndMouseCursorPosition(1);
-
-#if 0
-	if (noErr != CGSetLocalEventsSuppressionInterval(0.0)) {
-		/* don't use MacMsg which can call MyMoveMouse */
-	}
-	if (noErr != CGWarpMouseCursorPosition(cgp)) {
-		/* don't use MacMsg which can call MyMoveMouse */
-	}
-#endif
 
 	return trueblnr;
 }
@@ -1873,7 +1758,7 @@ LOCALPROC CheckMouseState(void)
 	*/
 	NSPoint p;
 
-	QZ_GetMouseLocation(&p);
+	MyGetMouseLocation(&p);
 	MousePositionNotify((int) p.x, (int) p.y);
 }
 
@@ -2163,9 +2048,6 @@ LOCALPROC UpdateTrueEmulatedTime(void)
 #endif
 		} else {
 			do {
-#if 0 && dbglog_TimeStuff
-				dbglog_writeln("got next tick");
-#endif
 				++TrueEmulatedTime;
 				TimeDiff -= MyTickDuration;
 				NextTickChangeTime += MyTickDuration;
@@ -2805,10 +2687,8 @@ LOCALPROC MySound_WroteABlock(void)
 #endif
 }
 
-LOCALFUNC blnr MySound_EndWrite0(ui4r actL)
+GLOBALOSGLUPROC MySound_EndWrite(ui4r actL)
 {
-	blnr v;
-
 	if (SoundDroppingBlock) {
 		/*
 			Nothing in the ring changes, so there is nothing to
@@ -2821,22 +2701,16 @@ LOCALFUNC blnr MySound_EndWrite0(ui4r actL)
 			SoundDropOffset = 0;
 			++SoundBlocksDropped;
 		}
-		return falseblnr;
+		return;
 	}
 
 	TheWriteOffset += actL;
 
-	if (0 != (TheWriteOffset & kOneBuffMask)) {
-		v = falseblnr;
-	} else {
+	if (0 == (TheWriteOffset & kOneBuffMask)) {
 		/* just finished a block */
 
 		MySound_WroteABlock();
-
-		v = trueblnr;
 	}
-
-	return v;
 }
 
 LOCALPROC MySound_SecondNotify0(void)
@@ -3309,10 +3183,6 @@ LOCALPROC MySound_Start(void)
 	}
 }
 
-#ifndef UseAudioComp
-#define UseAudioComp 1
-#endif
-
 LOCALPROC MySound_UnInit(void)
 {
 	if (cur_audio.enabled) {
@@ -3350,7 +3220,6 @@ LOCALPROC MySound_UnInit(void)
 
 		(void) result; /* ignore any errors */
 
-#if UseAudioComp
 		if (noErr != (result = AudioComponentInstanceDispose(
 			cur_audio.outputAudioUnit)))
 		{
@@ -3359,15 +3228,6 @@ LOCALPROC MySound_UnInit(void)
 				" in MySound_UnInit");
 #endif
 		}
-#else
-		if (noErr != (result = CloseComponent(
-			cur_audio.outputAudioUnit)))
-		{
-#if dbglog_HAVE
-			dbglog_writeln("CloseComponent fails in MySound_UnInit");
-#endif
-		}
-#endif
 
 		(void) result; /* ignore any errors */
 	}
@@ -3378,13 +3238,8 @@ LOCALPROC MySound_UnInit(void)
 LOCALFUNC blnr MySound_Init(void)
 {
 	OSStatus result = noErr;
-#if UseAudioComp
 	AudioComponent comp;
 	AudioComponentDescription desc;
-#else
-	Component comp;
-	ComponentDescription desc;
-#endif
 	struct AURenderCallbackStruct callback;
 	AudioStreamBasicDescription requestedDesc;
 
@@ -3412,12 +3267,6 @@ LOCALFUNC blnr MySound_Init(void)
 	requestedDesc.mSampleRate = SOUND_SAMPLERATE;
 
 	requestedDesc.mBitsPerChannel = (1 << kLn2SoundSampSz);
-#if 0
-	requestedDesc.mFormatFlags |= kLinearPCMFormatFlagIsSignedInteger;
-#endif
-#if 0
-	requestedDesc.mFormatFlags |= kLinearPCMFormatFlagIsBigEndian;
-#endif
 
 	requestedDesc.mFramesPerPacket = 1;
 	requestedDesc.mBytesPerFrame = (requestedDesc.mBitsPerChannel
@@ -3429,7 +3278,6 @@ LOCALFUNC blnr MySound_Init(void)
 	callback.inputProc = audioCallback;
 	callback.inputProcRefCon = &cur_audio;
 
-#if UseAudioComp
 	if (NULL == (comp = AudioComponentFindNext(NULL, &desc)))
 	{
 #if dbglog_HAVE
@@ -3437,17 +3285,7 @@ LOCALFUNC blnr MySound_Init(void)
 			"AudioComponentFindNext returned NULL");
 #endif
 	} else
-#else
-	if (NULL == (comp = FindNextComponent(NULL, &desc)))
-	{
-#if dbglog_HAVE
-		dbglog_writeln("Failed to start CoreAudio: "
-			"FindNextComponent returned NULL");
-#endif
-	} else
-#endif
 
-#if UseAudioComp
 	if (noErr != (result = AudioComponentInstanceNew(
 		comp, &cur_audio.outputAudioUnit)))
 	{
@@ -3456,15 +3294,6 @@ LOCALFUNC blnr MySound_Init(void)
 			" AudioComponentInstanceNew");
 #endif
 	} else
-#else
-	if (noErr != (result = OpenAComponent(
-		comp, &cur_audio.outputAudioUnit)))
-	{
-#if dbglog_HAVE
-		dbglog_writeln("Failed to start CoreAudio: OpenAComponent");
-#endif
-	} else
-#endif
 
 	if (noErr != (result = AudioUnitInitialize(
 		cur_audio.outputAudioUnit)))
@@ -3519,12 +3348,6 @@ LOCALFUNC blnr MySound_Init(void)
 	return trueblnr; /* keep going, even if no sound */
 }
 
-GLOBALOSGLUPROC MySound_EndWrite(ui4r actL)
-{
-	if (MySound_EndWrite0(actL)) {
-	}
-}
-
 LOCALPROC MySound_SecondNotify(void)
 {
 	if (cur_audio.enabled) {
@@ -3534,56 +3357,30 @@ LOCALPROC MySound_SecondNotify(void)
 
 #endif
 
-/*
-	The menu bar is built in Swift, in APPMENUS.swift. What used to
-	be here was a three item stub — application, File with one Open
-	item, and Special whose only entry dropped into the character
-	cell overlay — because almost every command lived in that overlay
-	rather than in the menu bar.
-*/
-LOCALPROC MyMenuSetup(void)
-{
-	[MNVMMenuController installMainMenu];
-}
-
-
-
 /* --- video out --- */
 
-
-LOCALPROC HaveChangedScreenBuff(ui4r top, ui4r left,
-	ui4r bottom, ui4r right)
-{
-	/*
-		This used to be gated on [MyNSview canDraw], which was
-		right for a view that drew through drawRect but is wrong
-		for a layer hosting Metal view, and is deprecated as of
-		macOS 10.14 for exactly that reason.
-
-		canDraw answers NO while the window is not yet visible or
-		is occluded. Since Metal presents through the layer rather
-		than through AppKit's drawing machinery, that gate simply
-		dropped frames: the window stayed black whenever drawing
-		began before it came to the front, and drew correctly
-		whenever it happened to be frontmost first. The symptom was
-		intermittent, which is what made it worth a comment.
-
-		MyDrawWithMetal already declines to draw when there is no
-		renderer, so no further check is needed here.
-	*/
-	MyDrawWithMetal(top, left, bottom, right);
-}
 
 /*
 	Converts and hands off the changed rectangle, if there is one.
 	ScreenClearChanges leaves the rectangle empty, Bottom below Top,
 	so a tick in which nothing on the guest screen changed costs
 	nothing here and no frame is marked ready.
+
+	This used to be gated on [MyNSview canDraw], which was right for
+	a view that drew through drawRect but is wrong for a layer
+	hosting Metal view, and is deprecated as of macOS 10.14 for
+	exactly that reason. canDraw answers NO while the window is not
+	yet visible or is occluded. Since Metal presents through the
+	layer rather than through AppKit's drawing machinery, that gate
+	simply dropped frames: the window stayed black whenever drawing
+	began before it came to the front. MyDrawWithMetal already
+	declines to draw when there is no renderer, so no further check
+	is needed here.
 */
 LOCALPROC MyDrawChangesAndClear(void)
 {
 	if (ScreenChangedBottom > ScreenChangedTop) {
-		HaveChangedScreenBuff(ScreenChangedTop, ScreenChangedLeft,
+		MyDrawWithMetal(ScreenChangedTop, ScreenChangedLeft,
 			ScreenChangedBottom, ScreenChangedRight);
 		ScreenClearChanges();
 	}
@@ -3600,18 +3397,6 @@ GLOBALOSGLUPROC DoneWithDrawingForTick(void)
 }
 
 /* --- keyboard input --- */
-
-LOCALPROC DisableKeyRepeat(void)
-{
-}
-
-LOCALPROC RestoreKeyRepeat(void)
-{
-}
-
-LOCALPROC ReconnectKeyCodes3(void)
-{
-}
 
 LOCALPROC DisconnectKeyCodes3(void)
 {
@@ -3786,29 +3571,6 @@ LOCALPROC InsertADisk0(void)
 }
 
 /* --- main window creation and disposal --- */
-
-LOCALFUNC blnr Screen_Init(void)
-{
-#if 0
-	if (noErr != Gestalt(gestaltSystemVersion,
-		&cur_video.system_version))
-	{
-		cur_video.system_version = 0;
-	}
-#endif
-
-#if 0
-#define MyCGMainDisplayID CGMainDisplayID
-	CGDirectDisplayID CurMainDisplayID = MyCGMainDisplayID();
-
-	cur_video.width = (ui5b) CGDisplayPixelsWide(CurMainDisplayID);
-	cur_video.height = (ui5b) CGDisplayPixelsHigh(CurMainDisplayID);
-#endif
-
-	InitKeyCodes();
-
-	return trueblnr;
-}
 
 #if MayFullScreen
 LOCALPROC AdjustMachineGrab(void)
@@ -4072,28 +3834,11 @@ label_exit:
 	EmuLock_Acquire();
 	if (MyGetRenderer()) {
 		MyDrawWithMetal(0, 0, vMacScreenHeight, vMacScreenWidth);
-
-		/*
-			since drawRect is called very rarely, didn't
-			bother above to calculate actual coordinates
-			to pass to MyDrawWithMetal.
-
-			if it did matter, could get list of dirty
-			rectangles, instead of dirtyRect that is
-			supposed to be their union. as follows:
-		*/
-#if 0
-		{
-			const NSRect *rectList;
-			NSInteger count;
-			NSInteger i;
-
-			[self getRectsBeingDrawn:&rectList count:&count];
-			for (i = 0; i < count; i++) {
-				MyDrawWithMetal(<converted> rectList[i]);
-			}
-		}
-#endif
+			/*
+				The whole screen rather than dirtyRect: drawRect is
+				called very rarely, and the whole converted buffer
+				is uploaded anyway.
+			*/
 	}
 	EmuLock_Release();
 }
@@ -4135,22 +3880,15 @@ LOCALPROC CloseMainWindow(void)
 	*/
 }
 
-LOCALPROC QZ_SetCaption(void)
+LOCALPROC MySetWindowTitle(void)
 {
-#if 0
-	NSString *string =
-		[[NSString alloc] initWithUTF8String: kStrAppName];
-#endif
-	[MyWindow setTitle: myAppName /* string */];
-#if 0
-	[string release];
-#endif
+	[MyWindow setTitle: myAppName];
 }
 
 enum {
 	kMagStateNormal,
 #if EnableMagnify
-	kMagStateMagnifgy,
+	kMagStateMagnify,
 #endif
 	kNumMagStates
 };
@@ -4258,13 +3996,17 @@ LOCALFUNC blnr CreateMainWindow(void)
 	{
 		NewWinRect = AllScrnBounds;
 
-		GLhOffset = botleftPos.x - AllScrnBounds.origin.x;
-		GLvOffset = (botleftPos.y - AllScrnBounds.origin.y)
-			+ ((NewWindowHeight < MainScrnBounds.size.height)
-				? NewWindowHeight : MainScrnBounds.size.height);
-
-		hOffset = GLhOffset;
-		vOffset = AllScrnBounds.size.height - GLvOffset;
+		/*
+			Pixels to the left of and above the drawing area in the
+			borderless window that covers every screen. The window
+			is in AppKit's bottom up coordinates, so the vertical
+			offset is measured from the top edge of the union.
+		*/
+		hOffset = botleftPos.x - AllScrnBounds.origin.x;
+		vOffset = AllScrnBounds.size.height
+			- ((botleftPos.y - AllScrnBounds.origin.y)
+				+ ((NewWindowHeight < MainScrnBounds.size.height)
+					? NewWindowHeight : MainScrnBounds.size.height));
 
 		style = NSWindowStyleMaskBorderless;
 	}
@@ -4278,7 +4020,7 @@ LOCALFUNC blnr CreateMainWindow(void)
 
 #if EnableMagnify
 		if (UseMagnify) {
-			WinIndx = kMagStateMagnifgy;
+			WinIndx = kMagStateMagnify;
 		} else
 #endif
 		{
@@ -4296,9 +4038,6 @@ LOCALFUNC blnr CreateMainWindow(void)
 				WinPositionWins[WinIndx].y,
 				NewWindowWidth, NewWindowHeight);
 		}
-
-		GLhOffset = 0;
-		GLvOffset = NewWindowHeight;
 
 		style = NSWindowStyleMaskTitled
 			| NSWindowStyleMaskMiniaturizable
@@ -4327,7 +4066,7 @@ LOCALFUNC blnr CreateMainWindow(void)
 			no need to set current_video as it's the
 			default for NSWindows
 		*/
-	QZ_SetCaption();
+	MySetWindowTitle();
 	[MyWindow setAcceptsMouseMovedEvents: YES];
 	[MyWindow setViewsNeedDisplay: NO];
 
@@ -4411,8 +4150,6 @@ struct MyWState {
 	NSWindow *f_MyWindow;
 	NSView *f_MyNSview;
 	MyClassWindowDelegate *f_MyWinDelegate;
-	short f_GLhOffset;
-	short f_GLvOffset;
 };
 typedef struct MyWState MyWState;
 #endif
@@ -4440,8 +4177,6 @@ LOCALPROC GetMyWState(MyWState *r)
 	r->f_MyWindow = MyWindow;
 	r->f_MyNSview = MyNSview;
 	r->f_MyWinDelegate = MyWinDelegate;
-	r->f_GLhOffset = GLhOffset;
-	r->f_GLvOffset = GLvOffset;
 }
 #endif
 
@@ -4468,8 +4203,6 @@ LOCALPROC SetMyWState(MyWState *r)
 	MyWindow = r->f_MyWindow;
 	MyNSview = r->f_MyNSview;
 	MyWinDelegate = r->f_MyWinDelegate;
-	GLhOffset = r->f_GLhOffset;
-	GLvOffset = r->f_GLvOffset;
 }
 #endif
 
@@ -4599,14 +4332,14 @@ LOCALPROC ToggleWantFullScreen(void)
 		int OldWinState =
 			UseFullScreen ? kWinStateFullScreen : kWinStateWindowed;
 		int OldMagState =
-			UseMagnify ? kMagStateMagnifgy : kMagStateNormal;
+			UseMagnify ? kMagStateMagnify : kMagStateNormal;
 		int NewWinState =
 			WantFullScreen ? kWinStateFullScreen : kWinStateWindowed;
 		int NewMagState = WinMagStates[NewWinState];
 
 		WinMagStates[OldWinState] = OldMagState;
 		if (kMagStateAuto != NewMagState) {
-			WantMagnify = (kMagStateMagnifgy == NewMagState);
+			WantMagnify = (kMagStateMagnify == NewMagState);
 		} else {
 			WantMagnify = falseblnr;
 			if (WantFullScreen) {
@@ -4631,14 +4364,11 @@ LOCALPROC ToggleWantFullScreen(void)
 
 LOCALPROC LeaveBackground(void)
 {
-	ReconnectKeyCodes3();
-	DisableKeyRepeat();
 	EmulationWasInterrupted = trueblnr;
 }
 
 LOCALPROC EnterBackground(void)
 {
-	RestoreKeyRepeat();
 	DisconnectKeyCodes3();
 
 	ForceShowCursor();
@@ -4819,11 +4549,7 @@ LOCALPROC CheckForSavedTasks(void)
 	}
 
 	if (CurSpeedStopped != (SpeedStopped ||
-		(gBackgroundFlag && ! RunInBackground
-#if EnableAutoSlow && 0
-			&& (QuietSubTicks >= 4092)
-#endif
-		)))
+		(gBackgroundFlag && ! RunInBackground)))
 	{
 		CurSpeedStopped = ! CurSpeedStopped;
 		if (CurSpeedStopped) {
@@ -5014,7 +4740,7 @@ LOCALPROC ProcessKeyEvent(blnr down, NSEvent *event)
 	ui3r scancode = [event keyCode];
 
 	ProcessEventModifiers(event);
-	Keyboard_UpdateKeyMap2(Keyboard_RemapMac(scancode), down);
+	Keyboard_UpdateKeyMap(Keyboard_RemapMac(scancode), down);
 }
 
 /*
@@ -5036,10 +4762,6 @@ LOCALFUNC blnr ProcessOneSystemEvent(NSEvent *event)
 		case NSEventTypeLeftMouseDown:
 		case NSEventTypeRightMouseDown:
 		case NSEventTypeOtherMouseDown:
-			/*
-				int button = QZ_OtherMouseButtonToSDL(
-					[event buttonNumber]);
-			*/
 			ProcessEventLocation(event);
 			ProcessEventModifiers(event);
 			if (([event window] == MyWindow)
@@ -5063,10 +4785,6 @@ LOCALFUNC blnr ProcessOneSystemEvent(NSEvent *event)
 		case NSEventTypeLeftMouseUp:
 		case NSEventTypeRightMouseUp:
 		case NSEventTypeOtherMouseUp:
-			/*
-				int button = QZ_OtherMouseButtonToSDL(
-					[event buttonNumber]);
-			*/
 			ProcessEventLocation(event);
 			ProcessEventModifiers(event);
 			if (! MyMouseButtonState) {
@@ -5610,29 +5328,25 @@ LOCALFUNC blnr InitCocoaStuff(void)
 			breaks NSApp setDelegate
 		*/
 
-	MyMenuSetup();
+	/*
+		The menu bar is built in Swift, in APPMENUS.swift. What used
+		to be here was a three item stub -- application, File with
+		one Open item, and Special whose only entry dropped into the
+		character cell overlay -- because almost every command lived
+		in that overlay rather than in the menu bar.
+	*/
+	[MNVMMenuController installMainMenu];
 
 	MyApplicationDelegate = [[MyClassApplicationDelegate alloc] init];
 	[MyNSApp setDelegate: MyApplicationDelegate];
 
-#if 0
-	[MyNSApp finishLaunching];
-#endif
-		/*
-			If use finishLaunching, after
-			Hide Moof command, activating from
-			Dock doesn't bring our window forward.
-			Using "run" instead fixes this.
-			As suggested by Hugues De Keyzer in
-			http://forums.libsdl.org/ post.
-			SDL 2.0 doesn't use this
-			technique. Was another solution found?
-		*/
-
 	[MyNSApp run];
 		/*
-			our applicationDidFinishLaunching forces
-			immediate halt.
+			our applicationDidFinishLaunching forces immediate
+			halt. finishLaunching would do instead, but then after
+			a Hide command, activating from the Dock did not bring
+			the window forward (as noted by Hugues De Keyzer on the
+			SDL forums).
 		*/
 
 	return trueblnr;
@@ -5691,10 +5405,6 @@ LOCALPROC ReserveAllocAll(void)
 
 LOCALFUNC blnr AllocMyMemory(void)
 {
-#if 0 /* for testing start up error reporting */
-	MacMsg(kStrOutOfMemTitle, kStrOutOfMemMessage, trueblnr);
-	return falseblnr;
-#else
 	uimr n;
 	blnr IsOk = falseblnr;
 
@@ -5716,7 +5426,6 @@ LOCALFUNC blnr AllocMyMemory(void)
 	}
 
 	return IsOk;
-#endif
 }
 
 LOCALPROC UnallocMyMemory(void)
@@ -5730,6 +5439,13 @@ LOCALFUNC blnr InitOSGLU(void)
 {
 	blnr IsOk = falseblnr;
 	NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+
+	InitKeyCodes();
+		/*
+			Was the whole of Screen_Init, which it had nothing to do
+			with. Order does not matter: it only zeroes the key map,
+			which nothing reads before the first event.
+		*/
 
 	if (AllocMyMemory())
 	if (setupWorkingDirectory())
@@ -5749,7 +5465,6 @@ LOCALFUNC blnr InitOSGLU(void)
 			So must load ROM, disk1.dsk, etc first.
 		*/
 	if (InitLocationDat())
-	if (Screen_Init())
 	if (CreateMainWindow())
 #if EmLocalTalk
 	if (EntropyGather())
@@ -5765,22 +5480,13 @@ LOCALFUNC blnr InitOSGLU(void)
 	return IsOk;
 }
 
-#if dbglog_HAVE && 0
-IMPORTPROC DumpRTC(void);
-#endif
-
 LOCALPROC UnInitOSGLU(void)
 {
 	NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
 
-#if dbglog_HAVE && 0
-	DumpRTC();
-#endif
-
 #if EmLocalTalk
 	UnInitLocalTalk();
 #endif
-	RestoreKeyRepeat();
 #if MayFullScreen
 	UngrabMachine();
 #endif

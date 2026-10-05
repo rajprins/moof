@@ -163,16 +163,6 @@ LOCALFUNC ui3r Keyboard_RemapMac(ui3r key)
 }
 
 /*
-	The entry point the host's key handlers call. With the Control
-	Mode gone there is nothing left to intercept, so this is now
-	only the emulated keyboard's own Keyboard_UpdateKeyMap.
-*/
-LOCALPROC Keyboard_UpdateKeyMap2(ui3r key, blnr down)
-{
-	Keyboard_UpdateKeyMap(key, down);
-}
-
-/*
 	Called when key ups may be missed, such as when the window is
 	sent to the background or a modal dialog takes over. Every key
 	the emulated computer believes is down is released, except Caps
