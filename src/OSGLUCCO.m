@@ -3431,6 +3431,12 @@ LOCALPROC HaveChangedScreenBuff(ui4r top, ui4r left,
 	MyDrawWithMetal(top, left, bottom, right);
 }
 
+/*
+	Converts and hands off the changed rectangle, if there is one.
+	ScreenClearChanges leaves the rectangle empty, Bottom below Top,
+	so a tick in which nothing on the guest screen changed costs
+	nothing here and no frame is marked ready.
+*/
 LOCALPROC MyDrawChangesAndClear(void)
 {
 	if (ScreenChangedBottom > ScreenChangedTop) {
@@ -5073,14 +5079,24 @@ label_retry:
 	}
 
 	if (CurSpeedStopped) {
-		DoneWithDrawingForTick();
-
 		/*
-			Nothing to compute while stopped. The old code blocked
-			on the event queue until something arrived; now it
-			simply idles, leaving the lock free so the main thread
-			can act on whatever the user does next.
+			No tick runs while stopped, so nothing records new
+			changes, and a frame converted before the pause is
+			already waiting in ScalingBuff for the main thread to
+			present. The one thing left to pick up is a
+			ScreenChangedAll from a geometry change while paused,
+			so the changed rectangle is converted only when it is
+			not empty, which MyDrawChangesAndClear checks for.
+			Converting the whole screen every 10 ms, as this used
+			to, was most of a paused emulator's CPU time.
+
+			Nothing to compute otherwise. The old code blocked on
+			the event queue until something arrived; now it simply
+			idles, leaving the lock free so the main thread can act
+			on whatever the user does next.
 		*/
+		MyDrawChangesAndClear();
+
 		if (onEmuThread) {
 			EmuLock_Release();
 			MySleepSeconds(0.010);
