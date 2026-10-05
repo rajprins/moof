@@ -28,6 +28,14 @@ LOCALVAR struct fpustruct
 {
 	myfpr fp[8];
 	CPTR FPIAR; /* Floating point instruction address register */
+	int ExcPending;
+		/*
+			vector of an enabled exception raised by an earlier
+			instruction, not yet cleared by FSAVE, or 0
+		*/
+	CPTR CurInstAddr; /* address of the current operation */
+	blnr SNaNOperand; /* current operation has a signaling NaN */
+	ui5r ExtraEXC; /* EXC bits not from softfloat (INEX1) */
 } fpu_dat;
 
 LOCALPROC myfp_SetFPIAR(ui5r v)
@@ -38,6 +46,98 @@ LOCALPROC myfp_SetFPIAR(ui5r v)
 LOCALFUNC ui5r myfp_GetFPIAR(void)
 {
 	return fpu_dat.FPIAR;
+}
+
+/*
+	Hardware reset of the 68881, also done by FRESTORE of a null
+	state frame: FPCR, FPSR and FPIAR are cleared and the data
+	registers are loaded with nonsignaling NaNs (MC68881UM 5.?,
+	M68000PRM FRESTORE).
+*/
+LOCALPROC FPU_Reset(void)
+{
+	int i;
+
+	for (i = 0; i < 8; ++i) {
+		fpu_dat.fp[i].high = 0x7FFF;
+		fpu_dat.fp[i].low = LIT64(0xFFFFFFFFFFFFFFFF);
+	}
+	fpu_dat.FPIAR = 0;
+	fpu_dat.ExcPending = 0;
+	myfp_Reset();
+}
+
+/*
+	The 68881 reports an enabled exception from an earlier
+	instruction when the next coprocessor instruction (other than
+	FSAVE or FRESTORE) starts: a pre-instruction exception, format
+	$0 frame, whose PC is the new instruction so that it is
+	restarted after the handler (MC68881UM 6.?, MC68020UM 10.?).
+	The exception stays pending until FSAVE, which handlers must
+	execute first; they clear it by setting bit 27 of the saved
+	BIU flags before FRESTORE.
+	Called before anything past the opcode word has been fetched.
+*/
+LOCALFUNC blnr FPU_TookPendingException(void)
+{
+	if (0 == fpu_dat.ExcPending) {
+		return falseblnr;
+	}
+
+	BackupPC();
+	Exception(fpu_dat.ExcPending);
+	return trueblnr;
+}
+
+/*
+	Start of an operation that can raise floating point
+	exceptions. Called right after the command word is fetched.
+*/
+LOCALPROC FPU_BeginOp(void)
+{
+	fpu_dat.CurInstAddr = m68k_getpc() - 4;
+	fpu_dat.SNaNOperand = falseblnr;
+	fpu_dat.ExtraEXC = 0;
+	float_exception_flags = 0;
+}
+
+/*
+	End of such an operation: replace the FPSR EXC byte with
+	this operation's exceptions, update AEXC, load FPIAR, and
+	make an enabled exception pending. Returns trueblnr if the
+	destination must be left unmodified, which the 68881 does
+	when the SNAN, OPERR or DZ trap is enabled (M68000PRM 1.6.?);
+	for the other exceptions the result is stored as usual.
+*/
+LOCALFUNC blnr FPU_FinishOp(void)
+{
+	ui5r exc;
+	int vec;
+
+	if (fpu_dat.SNaNOperand) {
+		float_raise(float_flag_invalid);
+	}
+	exc = myfp_FlagsToEXC(fpu_dat.SNaNOperand) | fpu_dat.ExtraEXC;
+	myfp_ClearExceptions();
+	myfp_SetEXC(exc);
+	myfp_SetFPIAR(fpu_dat.CurInstAddr);
+
+	vec = myfp_EnabledExcVector();
+	if (0 != vec) {
+		fpu_dat.ExcPending = vec;
+	}
+
+	return 0 != (exc & myfp_GetFPCR()
+		& (myfp_EXC_SNAN | myfp_EXC_OPERR | myfp_EXC_DZ));
+}
+
+/* quieted copy of x, as stored when the SNAN trap is disabled */
+LOCALPROC FPU_Quiet(myfpr *r, myfpr *x)
+{
+	*r = *x;
+	if (floatx80_is_signaling_nan(*r)) {
+		r->low |= LIT64(0x4000000000000000);
+	}
 }
 
 LOCALFUNC blnr DecodeAddrModeRegister(ui5b sz)
@@ -102,6 +202,7 @@ LOCALPROC write_long_double(ui5r addr, myfpr *xx)
 	put_long(addr + 8, v0);
 }
 
+#if 0
 LOCALPROC read_double(ui5r addr, myfpr *r)
 {
 	ui5r v1;
@@ -123,6 +224,7 @@ LOCALPROC write_double(ui5r addr, myfpr *dd)
 	put_long(addr + 0, v1);
 	put_long(addr + 4, v0);
 }
+#endif
 
 #if 0
 LOCALPROC read_single(ui5r addr, myfpr *r)
@@ -227,6 +329,31 @@ LOCALFUNC int CheckFPCondition(ui4b predicate)
 	return condition_true;
 }
 
+/*
+	Evaluate a conditional predicate for FBcc, FDBcc, FScc and
+	FTRAPcc. The IEEE nonaware predicates ($10..$1F) set BSUN
+	(and so IOP) when NAN is set (M68000PRM 3.6.? and 1.6.4.?).
+	If BSUN is enabled the exception is taken at once, with the
+	PC at the conditional instruction so it is retried after the
+	handler. nExt is the number of bytes fetched past the opcode.
+	Returns -1 if that happened, else the condition.
+*/
+LOCALFUNC int FPU_CheckCondition(ui4b predicate, ui5r nExt)
+{
+	if ((0x10 == (predicate & 0x30))
+		&& (0 != (myfp_GetConditionCodeByte() & 0x01)))
+	{
+		myfp_SetEXC(myfp_EXC_BSUN);
+		if (0 != (myfp_GetFPCR() & myfp_EXC_BSUN)) {
+			m68k_setpc(m68k_getpc() - 2 - nExt);
+			Exception(48);
+			return -1;
+		}
+	}
+
+	return CheckFPCondition(predicate);
+}
+
 LOCALIPROC DoCodeFPU_dflt(void)
 {
 	ReportAbnormalID(0x0301,
@@ -266,7 +393,14 @@ LOCALIPROC DoCodeFPU_Save(void)
 			put_long(V_regs.ArgAddr.mem + 12, 0);
 			put_long(V_regs.ArgAddr.mem + 16, 0);
 			put_long(V_regs.ArgAddr.mem + 20, 0);
-			put_long(V_regs.ArgAddr.mem + 24, 0x70000000);
+			/*
+				BIU flags: bit 27 clear means an exception is
+				pending (handlers set it to clear the exception).
+				FSAVE takes the pending exception out of the FPU.
+			*/
+			put_long(V_regs.ArgAddr.mem + 24,
+				(0 != fpu_dat.ExcPending) ? 0x70000000 : 0x78000000);
+			fpu_dat.ExcPending = 0;
 		}
 
 	} else {
@@ -294,11 +428,22 @@ LOCALIPROC DoCodeFPU_Restore(void)
 #endif
 		} else {
 			dstvalue = get_long(V_regs.ArgAddr.mem);
-			if (dstvalue != 0) {
+			if (dstvalue == 0) {
+				/* null state frame resets the FPU */
+				FPU_Reset();
+			} else {
 				if (0x1f180000 == dstvalue) {
+					ui5r biu = get_long(V_regs.ArgAddr.mem + 24);
+
 					if (3 == themode) {
 						m68k_areg(thereg) = V_regs.ArgAddr.mem + 28;
 					}
+					/*
+						bit 27 clear: exception pending. Only the
+						FPSR/FPCR bits are kept, so derive which.
+					*/
+					fpu_dat.ExcPending = (0 == (biu & 0x08000000))
+						? myfp_EnabledExcVector() : 0;
 				} else {
 					DoCodeFPU_dflt();
 #if dbglog_HAVE
@@ -323,8 +468,15 @@ LOCALIPROC DoCodeFPU_FBccW(void)
 		which is simply a FBF.w with offset 0
 	*/
 	ui4r Dat = V_regs.CurDecOpY.v[0].ArgDat;
+	int cond;
 
-	if (CheckFPCondition(Dat & 0x3F)) {
+	if (FPU_TookPendingException()) {
+		return;
+	}
+	cond = FPU_CheckCondition(Dat & 0x3F, 0);
+	if (cond < 0) {
+		/* took BSUN exception */
+	} else if (cond) {
 		DoCodeBraW();
 	} else {
 		SkipiWord();
@@ -336,8 +488,15 @@ LOCALIPROC DoCodeFPU_FBccW(void)
 LOCALIPROC DoCodeFPU_FBccL(void)
 {
 	ui4r Dat = V_regs.CurDecOpY.v[0].ArgDat;
+	int cond;
 
-	if (CheckFPCondition(Dat & 0x3F)) {
+	if (FPU_TookPendingException()) {
+		return;
+	}
+	cond = FPU_CheckCondition(Dat & 0x3F, 0);
+	if (cond < 0) {
+		/* took BSUN exception */
+	} else if (cond) {
 		DoCodeBraL();
 	} else {
 		SkipiLong();
@@ -348,13 +507,18 @@ LOCALIPROC DoCodeFPU_DBcc(void)
 {
 	ui4r Dat = V_regs.CurDecOpY.v[0].ArgDat;
 	ui4r thereg = Dat & 7;
-	ui4b word2 = (int)nextiword();
+	ui4b word2;
+	int condition_true;
 
-	ui4b predicate = word2 & 0x3F;
+	if (FPU_TookPendingException()) {
+		return;
+	}
+	word2 = (int)nextiword();
+	condition_true = FPU_CheckCondition(word2 & 0x3F, 2);
 
-	int condition_true = CheckFPCondition(predicate);
-
-	if (! condition_true) {
+	if (condition_true < 0) {
+		/* took BSUN exception */
+	} else if (! condition_true) {
 		ui5b fdb_count = ui5r_FromSWord(m68k_dreg(thereg)) - 1;
 
 		m68k_dreg(thereg) =
@@ -373,17 +537,25 @@ LOCALIPROC DoCodeFPU_Trapcc(void)
 {
 	ui4r Dat = V_regs.CurDecOpY.v[0].ArgDat;
 	ui4r thereg = Dat & 7;
+	ui4b word2;
+	int condition_true;
+	ui5r nExt = 2;
 
-	ui4b word2 = (int)nextiword();
-
-	ui4b predicate = word2 & 0x3F;
-
-	int condition_true = CheckFPCondition(predicate);
+	if (FPU_TookPendingException()) {
+		return;
+	}
+	word2 = (int)nextiword();
+	condition_true = FPU_CheckCondition(word2 & 0x3F, 2);
+	if (condition_true < 0) {
+		return; /* took BSUN exception */
+	}
 
 	if (thereg == 2) {
 		(void) nextiword();
+		nExt += 2;
 	} else if (thereg == 3) {
 		(void) nextilong();
+		nExt += 4;
 	} else if (thereg == 4) {
 	} else {
 		ReportAbnormalID(0x0302, "Invalid FTRAPcc (?");
@@ -391,21 +563,29 @@ LOCALIPROC DoCodeFPU_Trapcc(void)
 
 	if (condition_true) {
 		ReportAbnormalID(0x0303, "FTRAPcc trapping");
-		Exception(7);
+		ExceptionFmt2(7, CurInstAddr(nExt));
 	}
 }
 
 LOCALIPROC DoCodeFPU_Scc(void)
 {
-	ui4b word2 = (int)nextiword();
+	ui4b word2;
+	int cond;
 
-	if (! DecodeModeRegister(1)) {
+	if (FPU_TookPendingException()) {
+		return;
+	}
+	word2 = (int)nextiword();
+	cond = FPU_CheckCondition(word2 & 0x3F, 2);
+	if (cond < 0) {
+		/* took BSUN exception */
+	} else if (! DecodeModeRegister(1)) {
 		DoCodeFPU_dflt();
 #if dbglog_HAVE
 		dbglog_writeln("bad mode/reg in DoCodeFPU_Scc");
 #endif
 	} else {
-		if (CheckFPCondition(word2 & 0x3F)) {
+		if (cond) {
 			SetArgValueB(0xFFFF);
 		} else {
 			SetArgValueB(0x0000);
@@ -639,6 +819,19 @@ LOCALPROC DoCodeFPU_MoveM_list_EA(ui4b word2)
 	}
 }
 
+LOCALPROC FPU_StoreResult(myfpr *DestReg, myfpr *result)
+{
+	FPU_Quiet(DestReg, result);
+	myfp_SetConditionCodeByteFromResult(DestReg);
+}
+
+LOCALPROC SaveResultAndFPSR(myfpr *DestReg, myfpr *result)
+{
+	if (! FPU_FinishOp()) {
+		FPU_StoreResult(DestReg, result);
+	}
+}
+
 LOCALPROC DoCodeFPU_MoveCR(ui4b word2)
 {
 	/* FMOVECR */
@@ -653,20 +846,26 @@ LOCALPROC DoCodeFPU_MoveCR(ui4b word2)
 	} else {
 		ui4b RomOffset = word2 & 0x7F;
 		ui4b DestReg = (word2 >> 7) & 0x7;
+		myfpr result;
 
-		if (! myfp_getCR(&fpu_dat.fp[DestReg], RomOffset)) {
+		if (! myfp_getCR(&result, RomOffset)) {
 			DoCodeF_InvalidPlusWord();
 #if dbglog_HAVE
 			dbglog_writeln("Invalid constant number in FMOVECR");
 #endif
+		} else {
+			/* FMOVECR sets the condition codes like FMOVE */
+			SaveResultAndFPSR(&fpu_dat.fp[DestReg], &result);
 		}
 	}
 }
 
-LOCALPROC SaveResultAndFPSR(myfpr *DestReg, myfpr *result)
+/* opmodes that use the destination register as an operand */
+LOCALFUNC blnr FPU_OpIsDyadic(ui4r opmode)
 {
-	*DestReg = *result;
-	myfp_SetConditionCodeByteFromResult(result);
+	return ((opmode >= 0x20) && (opmode <= 0x2F))
+		|| (0x38 == opmode)
+		|| ((opmode >= 0x60) && (opmode <= 0x6F));
 }
 
 LOCALPROC DoCodeFPU_GenOp(ui4b word2, myfpr *source)
@@ -674,6 +873,13 @@ LOCALPROC DoCodeFPU_GenOp(ui4b word2, myfpr *source)
 	myfpr result;
 	myfpr t0;
 	myfpr *DestReg = &fpu_dat.fp[(word2 >> 7) & 0x7];
+
+	if (floatx80_is_signaling_nan(*source)
+		|| (FPU_OpIsDyadic(word2 & 0x7F)
+			&& floatx80_is_signaling_nan(*DestReg)))
+	{
+		fpu_dat.SNaNOperand = trueblnr;
+	}
 
 	switch (word2 & 0x7F) {
 
@@ -862,18 +1068,31 @@ LOCALPROC DoCodeFPU_GenOp(ui4b word2, myfpr *source)
 		case 0x36:
 		case 0x37:
 			/* FSINCOS */
-			myfp_SinCos(&result, &fpu_dat.fp[word2 & 0x7], source);
-			SaveResultAndFPSR(DestReg, &result);
+			myfp_SinCos(&result, &t0, source);
+			if (! FPU_FinishOp()) {
+				FPU_Quiet(&fpu_dat.fp[word2 & 0x7], &t0);
+				FPU_StoreResult(DestReg, &result);
+			}
 			break;
 
 		case 0x38: /* FCMP */
-			myfp_Sub(&result, DestReg, source);
-			/* don't save result */
-			myfp_SetConditionCodeByteFromResult(&result);
+			{
+				/*
+					A real compare, not a subtraction: the
+					difference of equal infinities is a NaN.
+				*/
+				ui3r cc = myfp_Compare(DestReg, source);
+
+				if (! FPU_FinishOp()) {
+					myfp_SetConditionCodeByte(cc);
+				}
+			}
 			break;
 
 		case 0x3A: /* FTST */
-			myfp_SetConditionCodeByteFromResult(source);
+			if (! FPU_FinishOp()) {
+				myfp_SetConditionCodeByteFromResult(source);
+			}
 			break;
 
 		/*
@@ -1016,7 +1235,10 @@ LOCALPROC DoCodeFPU_GenOpEA(ui4b word2)
 					"DecodeModeRegister fails GetFPSource S");
 #endif
 			} else {
-				myfp_FromSingleFormat(&source, GetArgValueL());
+				ui5r v = GetArgValueL();
+
+				fpu_dat.SNaNOperand = float32_is_signaling_nan(v);
+				myfp_FromSingleFormat(&source, v);
 				DoCodeFPU_GenOp(word2, &source);
 			}
 			break;
@@ -1032,18 +1254,21 @@ LOCALPROC DoCodeFPU_GenOpEA(ui4b word2)
 				DoCodeFPU_GenOp(word2, &source);
 			}
 			break;
-		case 3: /* packed-decimal real */
-			if (! DecodeAddrModeRegister(16)) {
+		case 3: /* packed-decimal real, 12 bytes */
+			if (! DecodeAddrModeRegister(12)) {
 				DoCodeF_InvalidPlusWord();
 #if dbglog_HAVE
 				dbglog_writeln(
 					"DecodeAddrModeRegister fails GetFPSource P");
 #endif
 			} else {
-				ReportAbnormalID(0x0304,
-					"Packed Decimal in GetFPSource");
-					/* correct? just set to a constant for now */
-				/* *r = 9123456789.0; */
+				ui5r v2 = get_long(V_regs.ArgAddr.mem);
+				ui5r v1 = get_long(V_regs.ArgAddr.mem + 4);
+				ui5r v0 = get_long(V_regs.ArgAddr.mem + 8);
+
+				if (myfp_FromPackedFormat(&source, v2, v1, v0)) {
+					fpu_dat.ExtraEXC |= myfp_EXC_INEX1;
+				}
 				DoCodeFPU_GenOp(word2, &source);
 			}
 			break;
@@ -1067,7 +1292,12 @@ LOCALPROC DoCodeFPU_GenOpEA(ui4b word2)
 					"DecodeAddrModeRegister fails GetFPSource D");
 #endif
 			} else {
-				read_double(V_regs.ArgAddr.mem, &source);
+				ui5r v1 = get_long(V_regs.ArgAddr.mem);
+				ui5r v0 = get_long(V_regs.ArgAddr.mem + 4);
+
+				fpu_dat.SNaNOperand = float64_is_signaling_nan(
+					(((ui6b)v1) << 32) | (v0 & 0xFFFFFFFF));
+				myfp_FromDoubleFormat(&source, v1, v0);
 				DoCodeFPU_GenOp(word2, &source);
 			}
 			break;
@@ -1098,6 +1328,16 @@ LOCALPROC DoCodeFPU_Move_FP_EA(ui4b word2)
 
 	ui4r SourceReg = (word2 >> 7) & 0x7;
 	myfpr *source = &fpu_dat.fp[SourceReg];
+	myfpr q; /* source, quieted if a signaling NaN */
+
+	/*
+		Can set SNAN, OPERR, OVFL, UNFL, INEX2 but doesn't change
+		the condition codes. The destination is decoded first
+		(that may fetch extension words and adjust An) and only
+		written if FPU_FinishOp allows it.
+	*/
+	fpu_dat.SNaNOperand = floatx80_is_signaling_nan(*source);
+	FPU_Quiet(&q, source);
 
 	switch ((word2 >> 10) & 0x7) {
 		case 0: /* long-word integer */
@@ -1107,7 +1347,11 @@ LOCALPROC DoCodeFPU_Move_FP_EA(ui4b word2)
 				dbglog_writeln("DecodeModeRegister fails FMOVE L");
 #endif
 			} else {
-				SetArgValueL(myfp_ToLong(source));
+				ui5r v = myfp_ToInt(source, 32);
+
+				if (! FPU_FinishOp()) {
+					SetArgValueL(v);
+				}
 			}
 			break;
 		case 1: /* Single-Precision real */
@@ -1117,7 +1361,11 @@ LOCALPROC DoCodeFPU_Move_FP_EA(ui4b word2)
 				dbglog_writeln("DecodeModeRegister fails FMOVE S");
 #endif
 			} else {
-				SetArgValueL(myfp_ToSingleFormat(source));
+				ui5r v = myfp_ToSingleFormat(source);
+
+				if (! FPU_FinishOp()) {
+					SetArgValueL(v);
+				}
 			}
 			break;
 		case 2: /* extended precision real */
@@ -1127,18 +1375,36 @@ LOCALPROC DoCodeFPU_Move_FP_EA(ui4b word2)
 				dbglog_writeln("DecodeAddrModeRegister fails FMOVE X");
 #endif
 			} else {
-				write_long_double(V_regs.ArgAddr.mem, source);
+				if (! FPU_FinishOp()) {
+					write_long_double(V_regs.ArgAddr.mem, &q);
+				}
 			}
 			break;
-		case 3: /* packed-decimal real */
-			if (! DecodeAddrModeRegister(16)) {
+		case 3: /* packed-decimal real, static k-factor */
+		case 7: /* packed-decimal real, dynamic k-factor */
+			if (! DecodeAddrModeRegister(12)) {
 				DoCodeF_InvalidPlusWord();
 #if dbglog_HAVE
 				dbglog_writeln("DecodeAddrModeRegister fails FMOVE P");
 #endif
 			} else {
-				ReportAbnormalID(0x0305, "Packed Decimal in FMOVE");
-				/* ? */
+				ui5r v2;
+				ui5r v1;
+				ui5r v0;
+				ui5r k = (3 == ((word2 >> 10) & 0x7))
+					? word2
+					: V_regs.regs[(word2 >> 4) & 7];
+
+				/* k-factor is a 7 bit signed number */
+				k &= 0x7F;
+				float_exception_flags |= myfp_ToPackedFormat(&q,
+					(0 != (k & 0x40)) ? ((si3r)k - 0x80) : (si3r)k,
+					&v2, &v1, &v0);
+				if (! FPU_FinishOp()) {
+					put_long(V_regs.ArgAddr.mem, v2);
+					put_long(V_regs.ArgAddr.mem + 4, v1);
+					put_long(V_regs.ArgAddr.mem + 8, v0);
+				}
 			}
 			break;
 		case 4: /* Word integer */
@@ -1148,7 +1414,11 @@ LOCALPROC DoCodeFPU_Move_FP_EA(ui4b word2)
 				dbglog_writeln("DecodeModeRegister fails FMOVE W");
 #endif
 			} else {
-				SetArgValueW(myfp_ToLong(source));
+				ui5r v = myfp_ToInt(source, 16);
+
+				if (! FPU_FinishOp()) {
+					SetArgValueW(v);
+				}
 			}
 			break;
 		case 5: /* Double-precision real */
@@ -1158,7 +1428,14 @@ LOCALPROC DoCodeFPU_Move_FP_EA(ui4b word2)
 				dbglog_writeln("DecodeAddrModeRegister fails FMOVE D");
 #endif
 			} else {
-				write_double(V_regs.ArgAddr.mem, source);
+				ui5r v1;
+				ui5r v0;
+
+				myfp_ToDoubleFormat(source, &v1, &v0);
+				if (! FPU_FinishOp()) {
+					put_long(V_regs.ArgAddr.mem, v1);
+					put_long(V_regs.ArgAddr.mem + 4, v0);
+				}
 			}
 			break;
 		case 6: /* Byte Integer */
@@ -1168,31 +1445,39 @@ LOCALPROC DoCodeFPU_Move_FP_EA(ui4b word2)
 				dbglog_writeln("DecodeModeRegister fails FMOVE B");
 #endif
 			} else {
-				SetArgValueB(myfp_ToLong(source));
+				ui5r v = myfp_ToInt(source, 8);
+
+				if (! FPU_FinishOp()) {
+					SetArgValueB(v);
+				}
 			}
 			break;
 		default:
-			DoCodeF_InvalidPlusWord();
-#if dbglog_HAVE
-			dbglog_writelnNum("Bad Source Specifier in FMOVE",
-				(word2 >> 10) & 0x7);
-#endif
+			/* can't get here, all 8 formats handled */
 			break;
 	}
 }
 
 LOCALIPROC DoCodeFPU_md60(void)
 {
-	ui4b word2 = (int)nextiword();
+	ui4b word2;
+
+	if (FPU_TookPendingException()) {
+		return;
+	}
+	word2 = (int)nextiword();
 
 	switch ((word2 >> 13) & 0x7) {
 		case 0:
+			FPU_BeginOp();
 			DoCodeFPU_GenOpReg(word2);
 			break;
 		case 2:
+			FPU_BeginOp();
 			DoCodeFPU_GenOpEA(word2);
 			break;
 		case 3:
+			FPU_BeginOp();
 			DoCodeFPU_Move_FP_EA(word2);
 			break;
 		case 4:

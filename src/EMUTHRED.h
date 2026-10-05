@@ -93,10 +93,33 @@ extern void EmuLock_Acquire(void);
 extern void EmuLock_Release(void);
 
 /*
+	Takes the lock only if it is free, returning whether it did. A
+	true result must be paired with EmuLock_Release like any other
+	acquisition. For work that can as well happen on the next frame
+	as on this one, so that the main thread need not wait behind a
+	tick in progress.
+*/
+extern bool EmuLock_TryAcquire(void);
+
+/*
+	Releases the lock, sleeps for the given time, and takes the lock
+	again. For the emulator thread only, which holds the lock exactly
+	once while running guest code, so that one release frees it.
+
+	This is the only sanctioned way for the emulator thread to pace:
+	a sleep taken with the lock held would stall the main thread for
+	its whole duration, and the unlock, sleep, relock order is easy
+	to get wrong when written out by hand. A non positive time still
+	hands the lock over, it just does not linger.
+*/
+extern void EmuLock_SleepUnlocked(double seconds);
+
+/*
 	Called by the emulator thread around the point where it would
 	otherwise hold the lock continuously. Releases and immediately
 	reacquires, giving the main thread a chance to run. Needed
-	because "all out" speed has no pacing sleep.
+	because "all out" speed has no pacing sleep. The same thing as
+	EmuLock_SleepUnlocked with the shortest pause that works.
 */
 extern void EmuLock_Yield(void);
 

@@ -37,10 +37,6 @@ typedef void (*tWriteOneDocType)(
 	char *LongName,
 	tWriteExtensionList WriteExtensionList);
 
-#if 0
-#define kCSrcFlagAsmAvail 0
-#define kCSrcFlagAltSrc 1
-#endif
 #define kCSrcFlagSkip 1
 #define kCSrcFlagUseAPI 2
 #define kCSrcFlagSortFirst 3
@@ -50,9 +46,6 @@ typedef void (*tWriteOneDocType)(
 #define kCSrcFlagSwift 7
 
 #define kCSrcFlgmNone 0
-#if 0
-#define kCSrcFlgmAltSrc (1 << kCSrcFlagAltSrc)
-#endif
 #define kCSrcFlgmSkip (1 << kCSrcFlagSkip)
 #define kCSrcFlgmUseAPI (1 << kCSrcFlagUseAPI)
 #define kCSrcFlgmSortFirst (1 << kCSrcFlagSortFirst)

@@ -33,6 +33,7 @@
 
 import SwiftUI
 import AppKit
+import Combine
 
 struct SettingsView: View {
 
@@ -43,9 +44,13 @@ struct SettingsView: View {
 		be left with the green button, the guest can eject a disk.
 		Polling while the window is open keeps what is shown honest
 		without needing the emulator to know the window exists.
+
+		The timer lives only between onAppear and onDisappear. Each
+		poll takes the emulator lock several times, so it must stop
+		when the window closes rather than run for the life of the
+		process.
 	*/
-	private let poll = Timer.publish(every: 0.5, on: .main, in: .common)
-		.autoconnect()
+	@State private var poll: AnyCancellable?
 
 	var body: some View {
 		Form {
@@ -77,12 +82,20 @@ struct SettingsView: View {
 					Text("No disks inserted")
 						.foregroundStyle(.secondary)
 				} else {
-					ForEach(bridge.insertedDrives, id: \.self) { drive in
+					ForEach(bridge.insertedDrives) { drive in
 						HStack {
-							Text("Disk \(drive + 1)")
+							Text(drive.title)
+								.lineLimit(1)
+								.truncationMode(.middle)
 							Spacer()
 							Button("Eject") {
-								bridge.eject(drive: drive)
+								/*
+									The Settings window is key while
+									its button is clicked, so the
+									question appears as a sheet on it.
+								*/
+								DiskEjector.eject(drive,
+									from: NSApp.keyWindow)
 							}
 						}
 					}
@@ -95,20 +108,31 @@ struct SettingsView: View {
 		.formStyle(.grouped)
 		.frame(width: 380)
 		.fixedSize(horizontal: false, vertical: true)
-		.onReceive(poll) { _ in
-			bridge.refresh()
-		}
 		.onAppear {
-			bridge.refresh()
+			bridge.refresh(force: true)
+			poll = Timer.publish(every: 0.5, on: .main, in: .common)
+				.autoconnect()
+				.sink { _ in bridge.refresh() }
+		}
+		.onDisappear {
+			poll?.cancel()
+			poll = nil
 		}
 	}
 }
 
-/// Owns the single Settings window.
+/*
+	Owns the Settings window while it is open.
+
+	The window is let go when closed, taking the hosting view and its
+	poll with it, and made afresh next time. Keeping it would keep
+	the SwiftUI view alive, and with it the timer.
+*/
 @objc(MNVMSettingsWindow)
 final class SettingsWindow: NSObject {
 
 	private static var window: NSWindow?
+	private static var closeObserver: NSObjectProtocol?
 
 	@objc static func show() {
 		if let existing = window {
@@ -116,17 +140,35 @@ final class SettingsWindow: NSObject {
 			return
 		}
 
-		let hosting = NSHostingView(rootView: SettingsView())
-
 		let w = NSWindow(
 			contentRect: .zero,
 			styleMask: [.titled, .closable, .miniaturizable],
 			backing: .buffered,
 			defer: false)
 		w.title = "Settings"
-		w.contentView = hosting
+		w.contentView = NSHostingView(rootView: SettingsView())
+		/*
+			Swift holds the only strong reference, so AppKit must not
+			release the window on close as well.
+		*/
 		w.isReleasedWhenClosed = false
 		w.center()
+
+		closeObserver = NotificationCenter.default.addObserver(
+			forName: NSWindow.willCloseNotification, object: w,
+			queue: .main) { _ in
+				/*
+					Dropping the content view here, rather than
+					waiting for the window to go, is what makes
+					SwiftUI call onDisappear and stop the poll.
+				*/
+				w.contentView = nil
+				window = nil
+				if let closeObserver {
+					NotificationCenter.default.removeObserver(closeObserver)
+				}
+				closeObserver = nil
+			}
 
 		window = w
 		w.makeKeyAndOrderFront(nil)

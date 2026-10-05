@@ -33,7 +33,9 @@
 	full screen can be left with the green button, a disk can be
 	ejected by the guest — so asking at the moment the menu opens is
 	both simpler and more accurate than trying to keep a copy in
-	step.
+	step. The asking happens once, in menuWillOpen; validation then
+	reads the copy the bridge just made, because every read of the
+	emulator waits on its lock and a menu validates every item.
 */
 
 import AppKit
@@ -45,16 +47,10 @@ final class MenuController: NSObject, NSMenuItemValidation {
 
 	private var bridge: EmulatorBridge { EmulatorBridge.shared }
 
-	/*
-		Taken from the bundle rather than written here, so that the
-		application name lives in exactly one place: the generator
-		puts kStrAppName into Info.plist, and everything else reads
-		it back.
-	*/
-	private var appName: String {
-		Bundle.main.object(forInfoDictionaryKey: "CFBundleName")
-			as? String ?? "Moof"
-	}
+	private var appName: String { Bundle.main.appName }
+
+	/// The one menu that is rebuilt, not merely revalidated, on open.
+	private var ejectMenu: NSMenu?
 
 	private override init() {
 		super.init()
@@ -76,10 +72,16 @@ final class MenuController: NSObject, NSMenuItemValidation {
 
 	// MARK: building
 
+	/*
+		Every menu made here has this controller as its delegate, so
+		that menuWillOpen can refresh the bridge once before the items
+		are validated.
+	*/
 	private func submenu(_ title: String, _ build: (NSMenu) -> Void)
 		-> NSMenuItem
 	{
 		let menu = NSMenu(title: title)
+		menu.delegate = self
 		build(menu)
 
 		let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
@@ -152,11 +154,8 @@ final class MenuController: NSObject, NSMenuItemValidation {
 				Populated in menuNeedsUpdate, because which drives
 				hold a disk changes as the guest runs.
 			*/
-			let eject = NSMenuItem(title: "Eject", action: nil,
-				keyEquivalent: "")
-			let ejectMenu = NSMenu(title: "Eject")
-			ejectMenu.delegate = self
-			eject.submenu = ejectMenu
+			let eject = submenu("Eject") { _ in }
+			ejectMenu = eject.submenu
 			menu.addItem(eject)
 		}
 	}
@@ -168,18 +167,12 @@ final class MenuController: NSObject, NSMenuItemValidation {
 				key: "i")
 			menu.addItem(.separator())
 
-			let speed = NSMenuItem(title: "Speed", action: nil,
-				keyEquivalent: "")
-			let speedMenu = NSMenu(title: "Speed")
-			for option in EmulatorSpeed.allCases {
-				let item = NSMenuItem(title: option.title,
-					action: #selector(setSpeed(_:)), keyEquivalent: "")
-				item.target = self
-				item.tag = option.rawValue
-				speedMenu.addItem(item)
-			}
-			speed.submenu = speedMenu
-			menu.addItem(speed)
+			menu.addItem(submenu("Speed") { speedMenu in
+				for option in EmulatorSpeed.allCases {
+					add(speedMenu, option.title, #selector(setSpeed(_:)),
+						mask: [], tag: option.rawValue)
+				}
+			})
 
 			add(menu, "Pause", #selector(toggleStopped(_:)))
 			menu.addItem(.separator())
@@ -253,59 +246,71 @@ final class MenuController: NSObject, NSMenuItemValidation {
 		guard let item = sender as? NSMenuItem,
 			let option = EmulatorSpeed(rawValue: item.tag) else { return }
 
-		bridge.refresh()
+		bridge.refresh(force: true)
 		bridge.speed = option
 	}
 
+	/*
+		The toggles reread first, so that they flip the value the
+		emulator has now and not the one shown when the menu opened,
+		which could be a second or more old by the time the item is
+		chosen.
+	*/
 	@objc private func toggleStopped(_ sender: Any?) {
-		bridge.refresh()
+		bridge.refresh(force: true)
 		bridge.isStopped.toggle()
 	}
 
 	@objc private func toggleMagnify(_ sender: Any?) {
-		bridge.refresh()
+		bridge.refresh(force: true)
 		bridge.magnify.toggle()
 	}
 
 	@objc private func toggleRunInBackground(_ sender: Any?) {
-		bridge.refresh()
+		bridge.refresh(force: true)
 		bridge.runInBackground.toggle()
 	}
 
 	@objc private func toggleAutoSlow(_ sender: Any?) {
-		bridge.refresh()
+		bridge.refresh(force: true)
 		bridge.autoSlow.toggle()
 	}
 
 	@objc private func ejectDrive(_ sender: Any?) {
-		guard let item = sender as? NSMenuItem else { return }
+		guard let item = sender as? NSMenuItem,
+			let drive = item.representedObject as? DiskDriveBox
+		else { return }
 
-		bridge.eject(drive: item.tag)
+		DiskEjector.eject(drive.drive, from: nil)
 	}
 
 	// MARK: validation
 
+	/*
+		Reads the bridge's published copy, refreshed in menuWillOpen
+		just before this is called for each item. Nothing here touches
+		the C surface or the emulator lock.
+	*/
 	func validateMenuItem(_ item: NSMenuItem) -> Bool {
 		switch item.action {
 		case #selector(setSpeed(_:)):
-			item.state = (Int(MNVM_GetSpeedValue()) == item.tag)
-				? .on : .off
+			item.state = (bridge.speed.rawValue == item.tag) ? .on : .off
 			return true
 
 		case #selector(toggleStopped(_:)):
-			item.state = MNVM_GetSpeedStopped() ? .on : .off
+			item.state = bridge.isStopped ? .on : .off
 			return true
 
 		case #selector(toggleMagnify(_:)):
-			item.state = MNVM_GetMagnify() ? .on : .off
+			item.state = bridge.magnify ? .on : .off
 			return bridge.hasMagnify
 
 		case #selector(toggleRunInBackground(_:)):
-			item.state = MNVM_GetRunInBackground() ? .on : .off
+			item.state = bridge.runInBackground ? .on : .off
 			return true
 
 		case #selector(toggleAutoSlow(_:)):
-			item.state = MNVM_GetAutoSlow() ? .on : .off
+			item.state = bridge.autoSlow ? .on : .off
 			return true
 
 		case #selector(ejectDrive(_:)):
@@ -317,16 +322,34 @@ final class MenuController: NSObject, NSMenuItemValidation {
 	}
 }
 
-/*
-	The Eject submenu is rebuilt each time it opens, since the set of
-	occupied drives changes while the guest runs.
-*/
 extension MenuController: NSMenuDelegate {
 
+	/*
+		One pass over the emulator per menu opened, forced so that it
+		is not skipped as too soon after the Settings poll, and so
+		that image names are reread: a drive may have had its disk
+		swapped since anyone last looked. The Eject submenu has
+		already refreshed in menuNeedsUpdate, which AppKit calls
+		first.
+	*/
+	func menuWillOpen(_ menu: NSMenu) {
+		guard menu !== ejectMenu else { return }
+
+		bridge.refresh(force: true)
+	}
+
+	/*
+		The Eject submenu is rebuilt each time it opens, since the set
+		of occupied drives changes while the guest runs. AppKit calls
+		this for every menu with a delegate, so the others are left
+		alone.
+	*/
 	func menuNeedsUpdate(_ menu: NSMenu) {
+		guard menu === ejectMenu else { return }
+
 		menu.removeAllItems()
 
-		bridge.refresh()
+		bridge.refresh(force: true)
 
 		if bridge.insertedDrives.isEmpty {
 			let empty = NSMenuItem(title: "No Disks Inserted",
@@ -337,11 +360,105 @@ extension MenuController: NSMenuDelegate {
 		}
 
 		for drive in bridge.insertedDrives {
-			let item = NSMenuItem(title: "Disk \(drive + 1)",
+			let item = NSMenuItem(title: drive.title,
 				action: #selector(ejectDrive(_:)), keyEquivalent: "")
 			item.target = self
-			item.tag = drive
+			item.tag = drive.index
+			item.representedObject = DiskDriveBox(drive)
 			menu.addItem(item)
 		}
+	}
+}
+
+/*
+	Carries a DiskDrive in an NSMenuItem's representedObject, so the
+	action knows which image the user picked and not only which slot.
+*/
+private final class DiskDriveBox: NSObject {
+	let drive: DiskDrive
+
+	init(_ drive: DiskDrive) {
+		self.drive = drive
+	}
+}
+
+/*
+	Ejecting from the host, shared by the File menu and the Settings
+	window.
+
+	The host can always take an image out, safely as far as the
+	emulator is concerned, but the guest is not told: to the emulated
+	Mac it is a disk yanked from the drive, with whatever it had not
+	yet written lost, and System 6 or 7 then asks for it back. So
+	once the guest has mounted a disk, the user is asked first and
+	pointed at the proper way. A disk the guest has not mounted yet
+	is simply removed.
+*/
+enum DiskEjector {
+
+	/// Ejects `drive`, asking first if the guest has it mounted. With
+	/// a window the question is a sheet on it, otherwise app modal.
+	static func eject(_ drive: DiskDrive, from window: NSWindow?) {
+		let bridge = EmulatorBridge.shared
+
+		guard bridge.isMountedByGuest(drive: drive.index) else {
+			bridge.eject(drive: drive.index)
+			return
+		}
+
+		let alert = NSAlert()
+		alert.alertStyle = .warning
+		alert.messageText = "The emulated Mac is still using "
+			+ (drive.imageName.map { "“\($0)”" } ?? "this disk") + "."
+		alert.informativeText = "Eject it in the emulated Mac first, "
+			+ "by dragging its icon to the Trash or choosing Eject "
+			+ "from the Finder’s Special menu. Ejecting it here is "
+			+ "like pulling a disk out of a running Mac: changes not "
+			+ "yet written to it can be lost."
+
+		let ejectButton = alert.addButton(withTitle: "Eject Anyway")
+		ejectButton.hasDestructiveAction = true
+		let cancelButton = alert.addButton(withTitle: "Cancel")
+
+		/*
+			Return cancels rather than ejects, so that dismissing the
+			alert without reading it is the safe choice.
+		*/
+		ejectButton.keyEquivalent = ""
+		cancelButton.keyEquivalent = "\r"
+
+		let finish = { (response: NSApplication.ModalResponse) in
+			guard response == .alertFirstButtonReturn else { return }
+
+			/*
+				The emulator kept running while the question was up.
+				If the guest has ejected the disk meanwhile, or
+				another image now sits in the drive, the answer no
+				longer applies to it.
+			*/
+			guard bridge.currentDrive(drive.index) == drive else {
+				bridge.refresh(force: true)
+				return
+			}
+			bridge.eject(drive: drive.index)
+		}
+
+		if let window {
+			alert.beginSheetModal(for: window, completionHandler: finish)
+		} else {
+			finish(alert.runModal())
+		}
+	}
+}
+
+extension Bundle {
+	/*
+		Taken from the bundle rather than written into the sources,
+		so that the application name lives in exactly one place: the
+		generator puts kStrAppName into Info.plist, and everything
+		else reads it back.
+	*/
+	var appName: String {
+		object(forInfoDictionaryKey: "CFBundleName") as? String ?? "Moof"
 	}
 }

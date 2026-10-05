@@ -19,8 +19,16 @@
 */
 
 
+/*
+	Echo suppression relies on the random LT_MyStamp carried in every
+	datagram (see stampInPacketIsMine) together with the
+	CertainlyNotMyPacket logic in SCCEMDEV.c. setup/SPCNFGGL.i always
+	defines LT_MayHaveEcho to 1 when LocalTalk is enabled, so the old
+	getpid() plus getifaddrs() alternative was never compiled, and it
+	has been dropped rather than kept as untested code.
+*/
 #if ! LT_MayHaveEcho
-include <ifaddrs.h>
+#error "LT over UDP does not implement preventing echo"
 #endif
 
 
@@ -35,13 +43,15 @@ include <ifaddrs.h>
 #define my_SOCKET SOCKET
 #define my_closesocket closesocket
 #define socklen_t int
+#define my_ssize_t int
 #else
 #define my_INVALID_SOCKET (-1)
 #define my_SOCKET int
 #define my_closesocket close
+#define my_ssize_t ssize_t
 #endif
 
-#if UDP_dolog
+#if dbglog_HAVE
 LOCALPROC dbglog_writeSockErr(char *s)
 {
 	dbglog_writeCStr(s);
@@ -66,9 +76,18 @@ LOCALVAR ui3b tx_buffer[4 + LT_TxBfMxSz] =
 
 
 /*
-	Receive buffer for LocalTalk data and its metadata
+	Receive buffer for LocalTalk data and its metadata.
+
+	A well formed datagram is the 4 byte stamp plus at most
+	LT_TxBfMxSz bytes of LLAP frame, which is what LT_TransmitPacket
+	can send (a real LLAP frame is at most 603 bytes). recvfrom
+	silently truncates a datagram that does not fit and returns only
+	the length it copied, without saying so. One spare byte makes
+	truncation detectable: any datagram that fills the whole buffer
+	was either truncated or too long to be ours, and is dropped.
 */
-LOCALVAR unsigned int rx_buffer_allocation = 1800;
+#define rx_max_datagram (4 + LT_TxBfMxSz)
+#define rx_buffer_allocation (rx_max_datagram + 1)
 
 LOCALVAR my_SOCKET sock_fd = my_INVALID_SOCKET;
 LOCALVAR blnr udp_ok = falseblnr;
@@ -85,6 +104,9 @@ LOCALPROC start_udp(void)
 	struct sockaddr_in addr;
 	struct ip_mreq mreq;
 	int one = 1;
+#if ! use_winsock
+	int flags;
+#endif
 
 #if use_winsock
 	if (0 != WSAStartup(MAKEWORD(2, 2), &wsaData)) {
@@ -99,29 +121,29 @@ LOCALPROC start_udp(void)
 	if (my_INVALID_SOCKET == (sock_fd =
 		socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)))
 	{
-#if UDP_dolog
+#if dbglog_HAVE
 		dbglog_writeSockErr("socket");
 #endif
-		return;
+		goto label_fail;
 	}
 
 	if (0 != setsockopt(sock_fd, SOL_SOCKET, SO_REUSEADDR,
 		(const void *)&one, sizeof(one)))
 	{
-#if UDP_dolog
+#if dbglog_HAVE
 		dbglog_writeSockErr("setsockopt SO_REUSEADDR");
 #endif
-		return;
+		goto label_fail;
 	}
 
 #if use_SO_REUSEPORT
 	if (0 != setsockopt(sock_fd, SOL_SOCKET, SO_REUSEPORT,
 		(const void *)&one, sizeof(one)))
 	{
-#if UDP_dolog
+#if dbglog_HAVE
 		dbglog_writeSockErr("setsockopt SO_REUSEPORT");
 #endif
-		return;
+		goto label_fail;
 	}
 	/*
 		https://stackoverflow.com/questions/14388706/
@@ -142,10 +164,10 @@ LOCALPROC start_udp(void)
 	errno = 0;
 #endif
 	if (0 != bind(sock_fd, (struct sockaddr*)&addr, sizeof(addr))) {
-#if UDP_dolog
+#if dbglog_HAVE
 		dbglog_writeSockErr("bind");
 #endif
-		return;
+		goto label_fail;
 	}
 
 	/* whack it on a multicast group */
@@ -155,29 +177,62 @@ LOCALPROC start_udp(void)
 	if (0 != setsockopt(sock_fd, IPPROTO_IP, IP_ADD_MEMBERSHIP,
 		(const void *)&mreq, sizeof(mreq)))
 	{
-#if UDP_dolog
+		/*
+			Without group membership no other node's datagrams reach
+			us, so the socket would be transmit only. That is worse
+			than inert: the guest would claim a node address without
+			ever hearing the lapACK of a node already using it. So
+			treat this (typically no network at launch) as failure.
+		*/
+#if dbglog_HAVE
 		dbglog_writeSockErr("setsockopt IP_ADD_MEMBERSHIP");
 #endif
+		goto label_fail;
 	}
 
-	/* non-blocking I/O is good for the soul */
+	/*
+		LT_ReceivePacket is polled from the emulation thread, so a
+		blocking socket would stall the whole emulator until a
+		datagram arrived. Failing to make it non-blocking is fatal.
+	*/
 #if use_winsock
 	{
-		int iResult;
 		u_long iMode = 1;
 
-		iResult = ioctlsocket(sock_fd, FIONBIO, &iMode);
-		if (iResult != NO_ERROR) {
-			/*
-				printf("ioctlsocket failed with error: %ld\n", iResult);
-			*/
+		if (NO_ERROR != ioctlsocket(sock_fd, FIONBIO, &iMode)) {
+#if dbglog_HAVE
+			dbglog_writeSockErr("ioctlsocket FIONBIO");
+#endif
+			goto label_fail;
 		}
 	}
 #else
-	fcntl(sock_fd, F_SETFL, O_NONBLOCK);
+	if ((-1 == (flags = fcntl(sock_fd, F_GETFL, 0)))
+		|| (-1 == fcntl(sock_fd, F_SETFL, flags | O_NONBLOCK)))
+	{
+#if dbglog_HAVE
+		dbglog_writeSockErr("fcntl O_NONBLOCK");
+#endif
+		goto label_fail;
+	}
 #endif
 
 	udp_ok = trueblnr;
+	return;
+
+label_fail:
+	/*
+		Leave no half configured socket behind: with udp_ok false
+		nothing would ever use or close it, and transmit and receive
+		must see a consistent "LocalTalk inert" state.
+	*/
+	if (my_INVALID_SOCKET != sock_fd) {
+		(void) my_closesocket(sock_fd);
+		sock_fd = my_INVALID_SOCKET;
+	}
+#if dbglog_HAVE
+	dbglog_writeln("start_udp failed, LocalTalk disabled");
+#endif
 }
 
 LOCALVAR unsigned char *MyRxBuffer = NULL;
@@ -213,7 +268,9 @@ LOCALPROC UnInitLocalTalk(void)
 			dbglog_writeSockErr("my_closesocket sock_fd");
 #endif
 		}
+		sock_fd = my_INVALID_SOCKET;
 	}
+	udp_ok = falseblnr;
 
 #if use_winsock
 	if (have_winsock) {
@@ -227,24 +284,20 @@ LOCALPROC UnInitLocalTalk(void)
 
 	if (NULL != MyRxBuffer) {
 		free(MyRxBuffer);
+		MyRxBuffer = NULL;
 	}
 }
 
-LOCALPROC embedMyPID(void)
+LOCALPROC embedMyStamp(void)
 {
 	/*
-		embeds my process ID in network byte order in the start of the
-		Tx buffer we assume a pid is at most 32 bits.  As far as I know
-		there's no actual implementation of POSIX with 64-bit PIDs so we
-		should be ok.
+		embeds LT_MyStamp in network byte order in the start of the
+		Tx buffer, so that receivers (including ourselves, since
+		multicast loops back) can tell whether a datagram may be
+		an echo of one we sent.
 	*/
 	int i;
-
-#if LT_MayHaveEcho
 	ui5r v = LT_MyStamp;
-#else
-	ui5r v = (ui5r)getpid();
-#endif
 
 	for (i = 0; i < 4; i++) {
 		tx_buffer[i] = (v >> (3 - i)*8) & 0xff;
@@ -253,47 +306,71 @@ LOCALPROC embedMyPID(void)
 
 GLOBALOSGLUPROC LT_TransmitPacket(void)
 {
-	size_t bytes;
+	my_ssize_t bytes;
+	struct sockaddr_in dest;
+
+	/*
+		If start_udp failed there is no socket; LocalTalk is inert
+		and the frame is simply lost, as on an unplugged network.
+	*/
+	if (! udp_ok) {
+		return;
+	}
+
+	/*
+		SCC_PutWR8 already stops LT_TxBuffSz at LT_TxBfMxSz, but
+		tx_buffer has room for exactly that many bytes after the
+		stamp, so check here too rather than trust a distant caller
+		with a read past the end of the buffer.
+	*/
+	if (LT_TxBuffSz > LT_TxBfMxSz) {
+#if UDP_dolog
+		dbglog_writeln("LT_TxBuffSz too large, not sent");
+#endif
+		return;
+	}
+
 	/* Write the packet to UDP */
 #if UDP_dolog
 	dbglog_writeln("writing to udp");
 #endif
-	embedMyPID();
-	if (udp_ok) {
-		struct sockaddr_in dest;
-		memset((char*)&dest, 0, sizeof(dest));
-		dest.sin_family = AF_INET;
-		dest.sin_addr.s_addr = inet_addr("239.192.76.84");
-		dest.sin_port = htons(1954);
+	embedMyStamp();
 
-		bytes = sendto(sock_fd,
-			(const void *)tx_buffer, LT_TxBuffSz + 4, 0,
-			(struct sockaddr*)&dest, sizeof(dest));
+	memset((char*)&dest, 0, sizeof(dest));
+	dest.sin_family = AF_INET;
+	dest.sin_addr.s_addr = inet_addr("239.192.76.84");
+	dest.sin_port = htons(1954);
+
+	bytes = sendto(sock_fd,
+		(const void *)tx_buffer, LT_TxBuffSz + 4, 0,
+		(struct sockaddr*)&dest, sizeof(dest));
+	if (bytes < 0) {
+		/*
+			A lost frame is normal LocalTalk behaviour, and the
+			protocols above LLAP retransmit, so just note it.
+		*/
+#if UDP_dolog
+		dbglog_writeSockErr("sendto");
+#endif
+	} else {
 #if UDP_dolog
 		dbglog_writeCStr("sent ");
 		dbglog_writeNum(bytes);
 		dbglog_writeCStr(" bytes");
 		dbglog_writeReturn();
 #endif
-		(void) bytes; /* avoid warning about unused */
 	}
 }
 
 /*
-	pidInPacketIsMine returns 1 if the process ID embedded in the packet
-	is the same as the process ID of the current process
+	stampInPacketIsMine returns 1 if the stamp embedded in the packet
+	is our own LT_MyStamp, meaning the packet may be an echo of one we
+	sent. A different stamp means it certainly came from someone else.
 */
-LOCALFUNC int pidInPacketIsMine(void)
+LOCALFUNC int stampInPacketIsMine(void)
 {
-	/* is the PID in the packet my own PID? */
 	int i;
-	ui5r v;
-
-#if LT_MayHaveEcho
-	v = LT_MyStamp;
-#else
-	v = (ui5r)getpid();
-#endif
+	ui5r v = LT_MyStamp;
 
 	for (i = 0; i < 4; i++) {
 		if (MyRxBuffer[i] != ((v >> (3 - i)*8) & 0xff)) {
@@ -304,93 +381,20 @@ LOCALFUNC int pidInPacketIsMine(void)
 	return 1;
 }
 
-/*
-	ipInPacketIsMine returns 1 if the source IP for the just-received
-	UDP packet is an IP address that is attached to an interface on this
-	machine.
-*/
-#if ! LT_MayHaveEcho
-LOCALFUNC int ipInPacketIsMine(void)
-{
-	if (MyRxAddress.sin_family != AF_INET) {
-#if UDP_dolog
-		dbglog_writeln(
-			"baffling error: got a non-inet packet on an inet socket");
-#endif
-		return 1;
-			/*
-				because we should drop this garbled packet on the floor
-			*/
-	}
-	in_addr_t raddr = MyRxAddress.sin_addr.s_addr;
-
-	/*
-		Now we need to iterate through all the interfaces on the machine
-	*/
-	struct ifaddrs *iflist, *ifptr;
-	struct sockaddr_in *addr;
-
-	int foundAddress = 0;
-
-	getifaddrs(&iflist);
-	for (ifptr = iflist; ifptr; ifptr = ifptr->ifa_next) {
-		/* if there is no address in this slot, skip it and move on */
-		if (! ifptr->ifa_addr) {
-			continue;
-		}
-
-		/* if it's not an af_inet then we skip it */
-		if (ifptr->ifa_addr->sa_family != AF_INET) {
-			continue;
-		}
-
-		addr = (struct sockaddr_in*)ifptr->ifa_addr;
-
-		if (addr->sin_addr.s_addr == raddr) {
-			foundAddress = 1;
-		}
-	}
-	freeifaddrs(iflist);
-
-	return foundAddress;
-}
-#endif
-
-/*
-	packetIsOneISent returns 1 if this looks like a packet that this
-	process sent and 0 if it looks like a packet that a different
-	process sent.  This provides loopback protection so that we do not
-	try to consume packets that we sent ourselves.  We do this by
-	checking the process ID embedded in the packet and the IP address
-	the packet was sent from.  It would be neater to just look at the
-	LocalTalk node ID embedded in the LLAP packet, but this doesn't
-	actually work, because during address acquisition it is entirely
-	legitimate (and, in the case of collision, *required*) for another
-	node to send a packet from what we think is our own node ID.
-*/
-#if ! LT_MayHaveEcho
-LOCALFUNC int packetIsOneISent(void)
-{
-	/*
-		do the PID comparison first because it's faster and most of the
-		time will disambiguate for us
-	*/
-	if (pidInPacketIsMine()) {
-		return ipInPacketIsMine();
-	}
-	return 0;
-}
-#endif
-
-LOCALFUNC int GetNextPacket(void)
+LOCALFUNC my_ssize_t GetNextPacket(void)
 {
 	unsigned char* device_buffer = MyRxBuffer;
 	socklen_t addrlen = sizeof(MyRxAddress);
+	my_ssize_t bytes;
+
+	if ((! udp_ok) || (NULL == device_buffer)) {
+		return -1;
+	}
 
 #if ! use_winsock
 	errno = 0;
 #endif
-	int bytes = recvfrom(sock_fd, (void *)device_buffer,
+	bytes = recvfrom(sock_fd, (void *)device_buffer,
 		rx_buffer_allocation, 0,
 		(struct sockaddr*)&MyRxAddress, &addrlen);
 	if (bytes < 0) {
@@ -426,32 +430,36 @@ LOCALFUNC int GetNextPacket(void)
 
 GLOBALOSGLUPROC LT_ReceivePacket(void)
 {
-	int bytes;
+	my_ssize_t bytes;
 
-#if ! LT_MayHaveEcho
-label_retry:
-#endif
 	bytes = GetNextPacket();
-	if (bytes > 0) {
-#if LT_MayHaveEcho
-		CertainlyNotMyPacket = ! pidInPacketIsMine();
-#endif
+	/*
+		The datagram comes from the network, so its size is untrusted.
+		It must hold the 4 byte stamp and at least the 3 byte LLAP
+		header (destination, source, type) that the SCC reads
+		unconditionally. Anything shorter would make bytes - 4 wrap
+		LT_RxBuffSz, which is unsigned, to about 4 GiB.
+		A datagram filling the whole buffer may have been truncated
+		(see rx_buffer_allocation), so it is dropped rather than
+		handed on as if it were a complete frame.
 
-#if ! LT_MayHaveEcho
-		if (packetIsOneISent()) {
-			goto label_retry;
-		}
-#endif
+		LT_RxBuffSz is exactly the number of bytes recvfrom stored
+		after the stamp, and the SCC never reads LT_RxBuffer past
+		LT_RxBuffSz (it supplies the CRC bytes as zeros), so no byte
+		beyond the received datagram reaches the guest.
+	*/
+	if ((bytes >= 4 + 3) && (bytes <= rx_max_datagram)) {
+		CertainlyNotMyPacket = ! stampInPacketIsMine();
 
 		{
 #if UDP_dolog
 			dbglog_writeCStr("passing ");
-			dbglog_writeNum(bytes - 4);
+			dbglog_writeNum((ui5r)(bytes - 4));
 			dbglog_writeCStr(" bytes to receiver");
 			dbglog_writeReturn();
 #endif
 			LT_RxBuffer = MyRxBuffer + 4;
-			LT_RxBuffSz = bytes - 4;
+			LT_RxBuffSz = (ui5r)(bytes - 4);
 		}
 	}
 }

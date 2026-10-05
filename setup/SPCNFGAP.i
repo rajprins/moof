@@ -136,7 +136,6 @@ LOCALPROC WriteAppSpecificCNFUDOSGoptions(void)
 	}
 
 	WriteCompCondBool("SaveDialogEnable", gbo_SaveDialogEnable);
-	WriteCompCondBool("EnableAltKeysMode", WantAltKeysMode);
 	{
 		uimr i;
 
@@ -149,32 +148,6 @@ LOCALPROC WriteAppSpecificCNFUDOSGoptions(void)
 			WriteEndDestFileLn();
 		}
 	}
-
-	if (gbk_keynam_Control == ControlModeKey) {
-		/* kStrCntrlKyName */
-	} else {
-		WriteBgnDestFileLn();
-		WriteCStrToDestFile("#define kControlModeKey \"");
-		WriteCStrToDestFile(GetSrcKeyMapName(ControlModeKey));
-		WriteCStrToDestFile("\"");
-		WriteEndDestFileLn();
-	}
-
-	if (gbk_keynam_Control == gbo_EKTMap) {
-		/* kStrCntrlKyName */
-	} else {
-		WriteBgnDestFileLn();
-		WriteCStrToDestFile("#define kUnMappedKey \"");
-		WriteCStrToDestFile(GetDstKeyMapName(gbo_EKTMap));
-		WriteCStrToDestFile("\"");
-		WriteEndDestFileLn();
-	}
-
-	WriteBgnDestFileLn();
-	WriteCStrToDestFile("#define MKC_UnMappedKey ");
-	WriteCStrToDestFile(" MKC_");
-	WriteCStrToDestFile(GetDstKeyMapName(gbo_EKTMap));
-	WriteEndDestFileLn();
 
 	WriteCompCondBool("VarFullScreen", WantVarFullScreen);
 	if (WantVarFullScreen) {
@@ -210,32 +183,6 @@ LOCALPROC WriteAppSpecificCNFUDOSGoptions(void)
 
 	if (! WantGrabKeysFS) {
 		WriteDestFileLn("#define GrabKeysFullScreen 0");
-	}
-
-	WriteCompCondBool("WantEnblCtrlInt", WantEnblCtrlInt);
-	WriteCompCondBool("WantEnblCtrlRst", WantEnblCtrlRst);
-	WriteCompCondBool("WantEnblCtrlKtg", WantEnblCtrlKtg);
-
-	if (WantInsertIthDisk) {
-		WriteDestFileLn("#define NeedRequestIthDisk 1");
-	}
-
-	WriteCompCondBool("UseControlKeys", trueblnr);
-	WriteCompCondBool("UseActvCode", WantActvCode);
-	WriteCompCondBool("EnableDemoMsg", WantDemoMsg);
-
-	if (WantActvCode) {
-		int i;
-
-		WriteBlankLineToDestFile();
-		for (i = 0; i < NumKeyCon; ++i) {
-			WriteBgnDestFileLn();
-			WriteCStrToDestFile("#define KeyCon");
-			WriteUnsignedToOutput(i);
-			WriteSpaceToDestFile();
-			WriteUnsignedToOutput(KeyCon[i]);
-			WriteEndDestFileLn();
-		}
 	}
 
 	WriteBlankLineToDestFile();

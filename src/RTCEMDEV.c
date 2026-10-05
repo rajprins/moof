@@ -76,6 +76,26 @@ typedef struct
 
 LOCALVAR RTC_Ty RTC;
 
+LOCALVAR ui5r RTC_DefaultsId;
+
+LOCALPROC RTC_PutHostOwned(void);
+
+/*
+	FNV-1a. Only needs to tell one build's defaults from another's,
+	not resist anything.
+*/
+LOCALFUNC ui5r PRAM_Fingerprint(ui3p p, int n)
+{
+	ui5r h = 2166136261UL;
+	int i;
+
+	for (i = 0; i < n; ++i) {
+		h = (h ^ p[i]) * 16777619UL;
+	}
+
+	return h;
+}
+
 /* RTC Functions */
 
 LOCALVAR ui5b LastRealDate;
@@ -166,8 +186,7 @@ GLOBALFUNC blnr RTC_Init(void)
 	RTC.PARAMRAM[0 + Group1Base] = 168; /* valid */
 
 #if EmLocalTalk
-	RTC.PARAMRAM[2 + Group1Base] = LT_NodeHint;
-		/* set to constant instead for testing collisions */
+	/* node id hint, written by RTC_PutHostOwned */
 #else
 #if (CurEmMd == kEmMd_II) || (CurEmMd == kEmMd_IIx)
 	RTC.PARAMRAM[2 + Group1Base] = 1;
@@ -303,12 +322,106 @@ GLOBALFUNC blnr RTC_Init(void)
 #if HaveXPRAM /* extended parameter ram initialized */
 	do_put_mem_long(&RTC.PARAMRAM[0xE4], CurMacLatitude);
 	do_put_mem_long(&RTC.PARAMRAM[0xE8], CurMacLongitude);
-	do_put_mem_long(&RTC.PARAMRAM[0xEC], CurMacDelta);
+	/* time zone delta at 0xEC, written by RTC_PutHostOwned */
 #endif
 
 #endif /* RTCinitPRAM */
 
+	RTC_DefaultsId = PRAM_Fingerprint(RTC.PARAMRAM, PARAMRAMSize);
+
+#if RTCinitPRAM
+	RTC_PutHostOwned();
+#endif
+
 	return trueblnr;
+}
+
+/*
+	Parameter RAM persistence.
+
+	The host keeps the guest's PRAM in a file between runs, so that
+	what is set in the Control Panel survives a restart. The file
+	I/O lives in the platform glue; this is only the narrow surface
+	it needs. The same names are exported by PMUEMDEV.c, because a
+	model has either an RTC or a PMU holding its PRAM, never both,
+	and so exactly one of the two is ever compiled in. That lets the
+	glue stay ignorant of which chip the emulated model uses.
+
+	The clock itself is not part of this. Seconds_1 is kept out of
+	the PRAM array and always follows the host clock.
+*/
+
+/*
+	The bytes the host owns rather than the guest. They are written
+	after the defaults and again after a restore, so a stale value
+	in a saved file never wins over what the host knows now.
+*/
+LOCALPROC RTC_PutHostOwned(void)
+{
+#if EmLocalTalk
+	RTC.PARAMRAM[2 + Group1Base] = LT_NodeHint;
+		/* set to constant instead for testing collisions */
+#endif
+#if HaveXPRAM
+	do_put_mem_long(&RTC.PARAMRAM[0xEC], CurMacDelta);
+#endif
+}
+
+GLOBALFUNC ui5r EmPRAM_Size(void)
+{
+	return PARAMRAMSize;
+}
+
+GLOBALFUNC ui5r EmPRAM_Model(void)
+{
+	return CurEmMd;
+}
+
+/*
+	Identifies the defaults RTC_Init produced for this build. Saved
+	with the file and compared on restore, so a file written by a
+	build with a different configuration of the same model, such as
+	another screen depth, whose video mode bytes would not suit this
+	one, is ignored rather than trusted.
+*/
+GLOBALFUNC ui5r EmPRAM_DefaultsId(void)
+{
+	return RTC_DefaultsId;
+}
+
+GLOBALPROC EmPRAM_Read(ui3p Buffer)
+{
+	int i;
+
+	for (i = 0; i < PARAMRAMSize; ++i) {
+		Buffer[i] = RTC.PARAMRAM[i];
+	}
+}
+
+GLOBALPROC EmPRAM_Write(ui3p Buffer)
+{
+	int i;
+
+	for (i = 0; i < PARAMRAMSize; ++i) {
+		RTC.PARAMRAM[i] = Buffer[i];
+	}
+
+#if RTCinitPRAM
+	RTC_PutHostOwned();
+#endif
+}
+
+/*
+	The host time zone, or its daylight saving state, has changed
+	while running. The clock itself follows by way of
+	CurMacDateInSeconds; this keeps the zone the guest reads from
+	PRAM in step with it.
+*/
+GLOBALPROC EmPRAM_TimeZoneChanged(void)
+{
+#if HaveXPRAM
+	do_put_mem_long(&RTC.PARAMRAM[0xEC], CurMacDelta);
+#endif
 }
 
 #ifdef RTC_OneSecond_PulseNtfy

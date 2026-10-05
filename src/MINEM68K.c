@@ -216,6 +216,14 @@ LOCALVAR struct regstruct
 
 	blnr TracePending;
 	blnr ExternalInterruptPending;
+	blnr Stopped; /* STOP executed, waiting for interrupt or trace */
+#if Use68020
+	CPTR ExcInstAddr;
+		/*
+			instruction address field of a format $2 stack frame,
+			set before taking exceptions 5, 6, 7 and 9
+		*/
+#endif
 #if 0
 	blnr ResetPending;
 #endif
@@ -379,7 +387,7 @@ LOCALINLINEPROC BackupPC(void)
 
 LOCALINLINEFUNC CPTR m68k_getpc(void)
 {
-	return V_regs.pc + (V_pc_p - V_regs.pc_pLo);
+	return V_regs.pc + (CPTR)(V_pc_p - V_regs.pc_pLo);
 }
 
 
@@ -848,7 +856,7 @@ LOCALPROC m68k_go_MaxCycles(void)
 
 FORWARDFUNC ui5r my_reg_call get_byte_ext(CPTR addr);
 
-LOCALFUNC ui5r my_reg_call get_byte(CPTR addr)
+LOCALINLINEFUNC ui5r my_reg_call get_byte(CPTR addr)
 {
 	ui3p m = (addr & V_regs.MATCrdB.usemask) + V_regs.MATCrdB.usebase;
 
@@ -861,7 +869,7 @@ LOCALFUNC ui5r my_reg_call get_byte(CPTR addr)
 
 FORWARDPROC my_reg_call put_byte_ext(CPTR addr, ui5r b);
 
-LOCALPROC my_reg_call put_byte(CPTR addr, ui5r b)
+LOCALINLINEPROC my_reg_call put_byte(CPTR addr, ui5r b)
 {
 	ui3p m = (addr & V_regs.MATCwrB.usemask) + V_regs.MATCwrB.usebase;
 	if ((addr & V_regs.MATCwrB.cmpmask) == V_regs.MATCwrB.cmpvalu) {
@@ -873,7 +881,7 @@ LOCALPROC my_reg_call put_byte(CPTR addr, ui5r b)
 
 FORWARDFUNC ui5r my_reg_call get_word_ext(CPTR addr);
 
-LOCALFUNC ui5r my_reg_call get_word(CPTR addr)
+LOCALINLINEFUNC ui5r my_reg_call get_word(CPTR addr)
 {
 	ui3p m = (addr & V_regs.MATCrdW.usemask) + V_regs.MATCrdW.usebase;
 	if ((addr & V_regs.MATCrdW.cmpmask) == V_regs.MATCrdW.cmpvalu) {
@@ -885,7 +893,7 @@ LOCALFUNC ui5r my_reg_call get_word(CPTR addr)
 
 FORWARDPROC my_reg_call put_word_ext(CPTR addr, ui5r w);
 
-LOCALPROC my_reg_call put_word(CPTR addr, ui5r w)
+LOCALINLINEPROC my_reg_call put_word(CPTR addr, ui5r w)
 {
 	ui3p m = (addr & V_regs.MATCwrW.usemask) + V_regs.MATCwrW.usebase;
 	if ((addr & V_regs.MATCwrW.cmpmask) == V_regs.MATCwrW.cmpvalu) {
@@ -897,7 +905,7 @@ LOCALPROC my_reg_call put_word(CPTR addr, ui5r w)
 
 FORWARDFUNC ui5r my_reg_call get_long_misaligned_ext(CPTR addr);
 
-LOCALFUNC ui5r my_reg_call get_long_misaligned(CPTR addr)
+LOCALINLINEFUNC ui5r my_reg_call get_long_misaligned(CPTR addr)
 {
 	CPTR addr2 = addr + 2;
 	ui3p m = (addr & V_regs.MATCrdW.usemask) + V_regs.MATCrdW.usebase;
@@ -921,7 +929,7 @@ FORWARDFUNC ui5r my_reg_call get_long_ext(CPTR addr);
 #endif
 
 #if FasterAlignedL
-LOCALFUNC ui5r my_reg_call get_long(CPTR addr)
+LOCALINLINEFUNC ui5r my_reg_call get_long(CPTR addr)
 {
 	if (0 == (addr & 0x03)) {
 		ui3p m = (addr & V_regs.MATCrdL.usemask)
@@ -941,7 +949,7 @@ LOCALFUNC ui5r my_reg_call get_long(CPTR addr)
 
 FORWARDPROC my_reg_call put_long_misaligned_ext(CPTR addr, ui5r l);
 
-LOCALPROC my_reg_call put_long_misaligned(CPTR addr, ui5r l)
+LOCALINLINEPROC my_reg_call put_long_misaligned(CPTR addr, ui5r l)
 {
 	CPTR addr2 = addr + 2;
 	ui3p m = (addr & V_regs.MATCwrW.usemask) + V_regs.MATCwrW.usebase;
@@ -961,7 +969,7 @@ FORWARDPROC my_reg_call put_long_ext(CPTR addr, ui5r l);
 #endif
 
 #if FasterAlignedL
-LOCALPROC my_reg_call put_long(CPTR addr, ui5r l)
+LOCALINLINEPROC my_reg_call put_long(CPTR addr, ui5r l)
 {
 	if (0 == (addr & 0x03)) {
 		ui3p m = (addr & V_regs.MATCwrL.usemask)
@@ -1089,12 +1097,12 @@ LOCALFUNC ui5b my_reg_call get_disp_ea(ui5b base)
 	}
 }
 
-LOCALFUNC ui5r my_reg_call DecodeAddr_Indirect(ui3rr ArgDat)
+LOCALINLINEFUNC ui5r my_reg_call DecodeAddr_Indirect(ui3rr ArgDat)
 {
 	return V_regs.regs[ArgDat];
 }
 
-LOCALFUNC ui5r my_reg_call DecodeAddr_APosIncB(ui3rr ArgDat)
+LOCALINLINEFUNC ui5r my_reg_call DecodeAddr_APosIncB(ui3rr ArgDat)
 {
 	ui5r *p = &V_regs.regs[ArgDat];
 	ui5r a = *p;
@@ -1104,7 +1112,7 @@ LOCALFUNC ui5r my_reg_call DecodeAddr_APosIncB(ui3rr ArgDat)
 	return a;
 }
 
-LOCALFUNC ui5r my_reg_call DecodeAddr_APosIncW(ui3rr ArgDat)
+LOCALINLINEFUNC ui5r my_reg_call DecodeAddr_APosIncW(ui3rr ArgDat)
 {
 	ui5r *p = &V_regs.regs[ArgDat];
 	ui5r a = *p;
@@ -1114,7 +1122,7 @@ LOCALFUNC ui5r my_reg_call DecodeAddr_APosIncW(ui3rr ArgDat)
 	return a;
 }
 
-LOCALFUNC ui5r my_reg_call DecodeAddr_APosIncL(ui3rr ArgDat)
+LOCALINLINEFUNC ui5r my_reg_call DecodeAddr_APosIncL(ui3rr ArgDat)
 {
 	ui5r *p = &V_regs.regs[ArgDat];
 	ui5r a = *p;
@@ -1124,7 +1132,7 @@ LOCALFUNC ui5r my_reg_call DecodeAddr_APosIncL(ui3rr ArgDat)
 	return a;
 }
 
-LOCALFUNC ui5r my_reg_call DecodeAddr_APreDecB(ui3rr ArgDat)
+LOCALINLINEFUNC ui5r my_reg_call DecodeAddr_APreDecB(ui3rr ArgDat)
 {
 	ui5r *p = &V_regs.regs[ArgDat];
 	ui5r a = *p - 1;
@@ -1134,7 +1142,7 @@ LOCALFUNC ui5r my_reg_call DecodeAddr_APreDecB(ui3rr ArgDat)
 	return a;
 }
 
-LOCALFUNC ui5r my_reg_call DecodeAddr_APreDecW(ui3rr ArgDat)
+LOCALINLINEFUNC ui5r my_reg_call DecodeAddr_APreDecW(ui3rr ArgDat)
 {
 	ui5r *p = &V_regs.regs[ArgDat];
 	ui5r a = *p - 2;
@@ -1144,7 +1152,7 @@ LOCALFUNC ui5r my_reg_call DecodeAddr_APreDecW(ui3rr ArgDat)
 	return a;
 }
 
-LOCALFUNC ui5r my_reg_call DecodeAddr_APreDecL(ui3rr ArgDat)
+LOCALINLINEFUNC ui5r my_reg_call DecodeAddr_APreDecL(ui3rr ArgDat)
 {
 	ui5r *p = &V_regs.regs[ArgDat];
 	ui5r a = *p - 4;
@@ -1154,29 +1162,29 @@ LOCALFUNC ui5r my_reg_call DecodeAddr_APreDecL(ui3rr ArgDat)
 	return a;
 }
 
-LOCALFUNC ui5r my_reg_call DecodeAddr_ADisp(ui3rr ArgDat)
+LOCALINLINEFUNC ui5r my_reg_call DecodeAddr_ADisp(ui3rr ArgDat)
 {
 	return V_regs.regs[ArgDat] + nextiSWord();
 }
 
-LOCALFUNC ui5r my_reg_call DecodeAddr_AIndex(ui3rr ArgDat)
+LOCALINLINEFUNC ui5r my_reg_call DecodeAddr_AIndex(ui3rr ArgDat)
 {
 	return get_disp_ea(V_regs.regs[ArgDat]);
 }
 
-LOCALFUNC ui5r my_reg_call DecodeAddr_AbsW(ui3rr ArgDat)
+LOCALINLINEFUNC ui5r my_reg_call DecodeAddr_AbsW(ui3rr ArgDat)
 {
 	UnusedParam(ArgDat);
 	return nextiSWord();
 }
 
-LOCALFUNC ui5r my_reg_call DecodeAddr_AbsL(ui3rr ArgDat)
+LOCALINLINEFUNC ui5r my_reg_call DecodeAddr_AbsL(ui3rr ArgDat)
 {
 	UnusedParam(ArgDat);
 	return nextilong();
 }
 
-LOCALFUNC ui5r my_reg_call DecodeAddr_PCDisp(ui3rr ArgDat)
+LOCALINLINEFUNC ui5r my_reg_call DecodeAddr_PCDisp(ui3rr ArgDat)
 {
 	CPTR pc = m68k_getpc();
 
@@ -1184,7 +1192,7 @@ LOCALFUNC ui5r my_reg_call DecodeAddr_PCDisp(ui3rr ArgDat)
 	return pc + nextiSWord();
 }
 
-LOCALFUNC ui5r my_reg_call DecodeAddr_PCIndex(ui3rr ArgDat)
+LOCALINLINEFUNC ui5r my_reg_call DecodeAddr_PCIndex(ui3rr ArgDat)
 {
 	UnusedParam(ArgDat);
 	return get_disp_ea(m68k_getpc());
@@ -4605,8 +4613,13 @@ LOCALPROC my_reg_call ExceptionTo(CPTR newpc
 		case 6: /* CHK, CHK2 */
 		case 7: /* cpTRAPcc, TRAPCcc, TRAPv */
 		case 9: /* Trace */
+			/*
+				Format $2 frame (MC68020UM 6.4): the stacked PC is
+				the next instruction, the extra long word is the
+				address of the instruction that caused the exception.
+			*/
 			m68k_areg(7) -= 4;
-			put_long(m68k_areg(7), m68k_getpc());
+			put_long(m68k_areg(7), V_regs.ExcInstAddr);
 			m68k_areg(7) -= 2;
 			put_word(m68k_areg(7), 0x2000 + nr * 4);
 			break;
@@ -4628,6 +4641,8 @@ LOCALPROC my_reg_call ExceptionTo(CPTR newpc
 	V_regs.m = 0;
 #endif
 	V_regs.TracePending = falseblnr;
+	V_regs.Stopped = falseblnr;
+		/* any exception ends the stopped state (M68000PRM, STOP) */
 }
 
 LOCALPROC my_reg_call Exception(int nr)
@@ -4643,6 +4658,22 @@ LOCALPROC my_reg_call Exception(int nr)
 		);
 }
 
+
+#if Use68020
+/*
+	Address of the instruction now executing, assuming the opcode
+	and nExtBytes of extension words have been fetched.
+*/
+#define CurInstAddr(nExtBytes) (m68k_getpc() - 2 - (nExtBytes))
+#endif
+
+/* Exception that uses a format $2 frame on the 68020 */
+#if Use68020
+#define ExceptionFmt2(nr, instaddr) \
+	(V_regs.ExcInstAddr = (instaddr), Exception(nr))
+#else
+#define ExceptionFmt2(nr, instaddr) Exception(nr)
+#endif
 
 LOCALIPROC DoCodeA(void)
 {
@@ -6151,6 +6182,9 @@ LOCALIPROC DoCodeMulS(void)
 LOCALIPROC DoCodeDivU(void)
 {
 	/* DivU 1000ddd011mmmrrr */
+#if Use68020
+	CPTR instaddr = CurInstAddr(0);
+#endif
 	ui5r srcvalue = DecodeGetSrcValue();
 	ui5r dstreg = V_regs.CurDecOpY.v[1].ArgDat;
 	ui5r *dstp = &V_regs.regs[dstreg];
@@ -6161,7 +6195,7 @@ LOCALIPROC DoCodeDivU(void)
 		V_MaxCyclesToGo -=
 			(38 * kCycleScale + 3 * RdAvgXtraCyc + 3 * WrAvgXtraCyc);
 #endif
-		Exception(5);
+		ExceptionFmt2(5, instaddr);
 #if m68k_logExceptions
 		dbglog_WriteNote("*** zero devide exception");
 #endif
@@ -6194,6 +6228,9 @@ LOCALIPROC DoCodeDivU(void)
 LOCALIPROC DoCodeDivS(void)
 {
 	/* DivS 1000ddd111mmmrrr */
+#if Use68020
+	CPTR instaddr = CurInstAddr(0);
+#endif
 	ui5r srcvalue = DecodeGetSrcValue();
 	ui5r dstreg = V_regs.CurDecOpY.v[1].ArgDat;
 	ui5r *dstp = &V_regs.regs[dstreg];
@@ -6204,7 +6241,7 @@ LOCALIPROC DoCodeDivS(void)
 		V_MaxCyclesToGo -=
 			(38 * kCycleScale + 3 * RdAvgXtraCyc + 3 * WrAvgXtraCyc);
 #endif
-		Exception(5);
+		ExceptionFmt2(5, instaddr);
 #if m68k_logExceptions
 		dbglog_WriteNote("*** zero devide exception");
 #endif
@@ -6669,8 +6706,8 @@ LOCALIPROC DoCodeMoveP0(void)
 	ui5r dstreg = V_regs.CurDecOpY.v[1].ArgDat;
 	ui5r *dstp = &V_regs.regs[dstreg];
 
-	ui5r Displacement = nextiword_nm();
-		/* shouldn't this sign extend ? */
+	ui5r Displacement = nextiSWord();
+		/* d16 is a signed displacement (M68000PRM, MOVEP) */
 	CPTR memp = *srcp + Displacement;
 
 	ui4r val = ((get_byte(memp) & 0x00FF) << 8)
@@ -6696,8 +6733,8 @@ LOCALIPROC DoCodeMoveP1(void)
 	ui5r dstreg = V_regs.CurDecOpY.v[1].ArgDat;
 	ui5r *dstp = &V_regs.regs[dstreg];
 
-	ui5r Displacement = nextiword_nm();
-		/* shouldn't this sign extend ? */
+	ui5r Displacement = nextiSWord();
+		/* d16 is a signed displacement (M68000PRM, MOVEP) */
 	CPTR memp = *srcp + Displacement;
 
 	ui5r val = ((get_byte(memp) & 0x00FF) << 24)
@@ -6716,8 +6753,8 @@ LOCALIPROC DoCodeMoveP2(void)
 	ui5r dstreg = V_regs.CurDecOpY.v[1].ArgDat;
 	ui5r *dstp = &V_regs.regs[dstreg];
 
-	ui5r Displacement = nextiword_nm();
-		/* shouldn't this sign extend ? */
+	ui5r Displacement = nextiSWord();
+		/* d16 is a signed displacement (M68000PRM, MOVEP) */
 	CPTR memp = *srcp + Displacement;
 
 	ui4r val = *dstp;
@@ -6734,8 +6771,8 @@ LOCALIPROC DoCodeMoveP3(void)
 	ui5r dstreg = V_regs.CurDecOpY.v[1].ArgDat;
 	ui5r *dstp = &V_regs.regs[dstreg];
 
-	ui5r Displacement = nextiword_nm();
-		/* shouldn't this sign extend ? */
+	ui5r Displacement = nextiSWord();
+		/* d16 is a signed displacement (M68000PRM, MOVEP) */
 	CPTR memp = *srcp + Displacement;
 
 	ui5r val = *dstp;
@@ -6757,6 +6794,9 @@ LOCALPROC op_illg(void)
 
 LOCALIPROC DoCodeChk(void)
 {
+#if Use68020
+	CPTR instaddr = CurInstAddr(0);
+#endif
 	ui5r dstvalue = DecodeGetSrcGetDstValue();
 	ui5r srcvalue = V_regs.SrcVal;
 
@@ -6768,7 +6808,7 @@ LOCALIPROC DoCodeChk(void)
 			(30 * kCycleScale + 3 * RdAvgXtraCyc + 3 * WrAvgXtraCyc);
 #endif
 		NFLG = 1;
-		Exception(6);
+		ExceptionFmt2(6, instaddr);
 	} else if (((si5r)srcvalue) > ((si5r)dstvalue)) {
 		NeedDefaultLazyAllFlags();
 
@@ -6777,7 +6817,7 @@ LOCALIPROC DoCodeChk(void)
 			(30 * kCycleScale + 3 * RdAvgXtraCyc + 3 * WrAvgXtraCyc);
 #endif
 		NFLG = 0;
-		Exception(6);
+		ExceptionFmt2(6, instaddr);
 	}
 }
 
@@ -6798,7 +6838,7 @@ LOCALIPROC DoCodeTrapV(void)
 		V_MaxCyclesToGo -=
 			(34 * kCycleScale + 4 * RdAvgXtraCyc + 3 * WrAvgXtraCyc);
 #endif
-		Exception(7);
+		ExceptionFmt2(7, CurInstAddr(0));
 	}
 }
 
@@ -6891,23 +6931,24 @@ LOCALIPROC DoCodeFdefault(void)
 	Exception(0xB);
 }
 
-LOCALPROC m68k_setstopped(void)
-{
-	/* not implemented. doesn't seemed to be used on Mac Plus */
-	Exception(4); /* fake an illegal instruction */
-#if m68k_logExceptions
-	dbglog_WriteNote("*** set stopped");
-#endif
-}
-
 LOCALIPROC DoCodeStop(void)
 {
 	/* Stop 0100111001110010 */
 	if (0 == V_regs.s) {
 		DoPrivilegeViolation();
 	} else {
+		/*
+			M68000PRM, STOP: load SR, advance the PC past the
+			immediate word, and stop fetching instructions until
+			a trace, interrupt or reset exception. m68k_go_nCycles
+			idles while V_regs.Stopped is set; ExceptionTo clears it.
+		*/
 		m68k_setSR(nextiword_nm());
-		m68k_setstopped();
+		V_regs.Stopped = trueblnr;
+		NeedToGetOut();
+#if m68k_logExceptions
+		dbglog_WriteNote("*** set stopped");
+#endif
 	}
 }
 
@@ -7023,9 +7064,11 @@ LOCALIPROC DoCodeEXTBL(void)
 LOCALPROC DoCHK2orCMP2(void)
 {
 	/* CHK2 or CMP2 00000ss011mmmrrr */
+	CPTR instaddr = CurInstAddr(0);
 	ui5r regv;
 	ui5r lower;
 	ui5r upper;
+	ui5r mask;
 	ui5r extra = nextiword_nm();
 	ui5r DstAddr = DecodeDst();
 	ui5r srcreg = (extra >> 12) & 0x0F;
@@ -7034,22 +7077,14 @@ LOCALPROC DoCHK2orCMP2(void)
 	/* ReportAbnormal("CHK2 or CMP2 instruction"); */
 	switch (V_regs.CurDecOpY.v[0].ArgDat) {
 		case 1:
-			if ((extra & 0x8000) == 0) {
-				regv = ui5r_FromSByte(*srcp);
-			} else {
-				regv = ui5r_FromSLong(*srcp);
-			}
 			lower = get_byte(DstAddr);
 			upper = get_byte(DstAddr + 1);
+			mask = 0x000000FF;
 			break;
 		case 2:
-			if ((extra & 0x8000) == 0) {
-				regv = ui5r_FromSWord(*srcp);
-			} else {
-				regv = ui5r_FromSLong(*srcp);
-			}
 			lower = get_word(DstAddr);
 			upper = get_word(DstAddr + 2);
+			mask = 0x0000FFFF;
 			break;
 		default:
 #if ExtraAbnormalReports
@@ -7058,27 +7093,40 @@ LOCALPROC DoCHK2orCMP2(void)
 					"illegal opsize in CHK2 or CMP2");
 			}
 #endif
-			if ((extra & 0x8000) == 0) {
-				regv = ui5r_FromSLong(*srcp);
-			} else {
-				regv = ui5r_FromSLong(*srcp);
-			}
 			lower = get_long(DstAddr);
 			upper = get_long(DstAddr + 4);
+			mask = 0xFFFFFFFF;
 			break;
 	}
 
+	/*
+		M68000PRM, CHK2/CMP2: for an address register the bounds
+		are sign-extended (get_byte and get_word already do this)
+		and compared with all 32 bits of An; for a data register
+		only the low-order byte or word of Dn is checked.
+	*/
+	if ((extra & 0x8000) != 0) {
+		mask = 0xFFFFFFFF;
+	}
+	regv = *srcp & mask;
+	lower &= mask;
+	upper &= mask;
+
 	NeedDefaultLazyAllFlags();
 
+	/*
+		The bounds may be signed (arithmetically smaller value
+		first) or unsigned (logically smaller value first), and
+		the manual defines both. Treating the range as
+		[lower, upper] modulo 2^n covers either: Rn is in bounds
+		iff (Rn - lower) mod 2^n <= (upper - lower) mod 2^n.
+		N and V are undefined and left alone.
+	*/
 	ZFLG = Bool2Bit((upper == regv) || (lower == regv));
-	CFLG = Bool2Bit((((si5r)lower) <= ((si5r)upper))
-			? (((si5r)regv) < ((si5r)lower)
-				|| ((si5r)regv) > ((si5r)upper))
-			: (((si5r)regv) > ((si5r)upper)
-				|| ((si5r)regv) < ((si5r)lower)));
+	CFLG = Bool2Bit(((regv - lower) & mask) > ((upper - lower) & mask));
 
 	if ((extra & 0x800) && (CFLG != 0)) {
-		Exception(6);
+		ExceptionFmt2(6, instaddr);
 	}
 }
 #endif
@@ -7215,8 +7263,8 @@ LOCALPROC DoCAS2(void)
 					put_word(rn1, m68k_dreg(du1));
 					put_word(rn2, m68k_dreg(du2));
 				} else {
-					put_word(rn1, m68k_dreg(du1));
-					put_word(rn2, m68k_dreg(du2));
+					put_long(rn1, m68k_dreg(du1));
+					put_long(rn2, m68k_dreg(du2));
 				}
 			}
 		}
@@ -7443,6 +7491,7 @@ LOCALIPROC DoCodeDivL(void)
 	/* DIVU 0100110001mmmrrr 0rrr0s0000000rrr */
 	/* DIVS 0100110001mmmrrr 0rrr1s0000000rrr */
 	/* ReportAbnormal("DIVS/DIVU long"); */
+	CPTR instaddr = CurInstAddr(0);
 	ui6r0 v2;
 	ui5b quot;
 	ui5b rem;
@@ -7452,7 +7501,7 @@ LOCALIPROC DoCodeDivL(void)
 	ui5r src = (ui5b)(si5b)DecodeGetDstValue();
 
 	if (src == 0) {
-		Exception(5);
+		ExceptionFmt2(5, instaddr);
 #if m68k_logExceptions
 		dbglog_WriteNote("*** zero devide exception");
 #endif
@@ -7702,9 +7751,21 @@ LOCALIPROC DoCodeLinkL(void)
 #if Use68020
 LOCALPROC DoCodeTRAPcc_t(void)
 {
+	ui5r nExt;
+
 	ReportAbnormalID(0x011B, "TRAPcc trapping");
-	Exception(7);
-	/* pc pushed onto stack wrong */
+	switch (V_regs.CurDecOpY.v[1].ArgDat) {
+		case 2:
+			nExt = 2;
+			break;
+		case 3:
+			nExt = 4;
+			break;
+		default:
+			nExt = 0;
+			break;
+	}
+	ExceptionFmt2(7, CurInstAddr(nExt));
 }
 #endif
 
@@ -7735,7 +7796,7 @@ LOCALIPROC DoCodeTRAPcc(void)
 		default:
 			ReportAbnormalID(0x011E, "TRAPcc illegal format");
 			op_illg();
-			break;
+			return; /* don't also evaluate the condition */
 	}
 	cctrue(DoCodeTRAPcc_t, DoCodeTRAPcc_f);
 }
@@ -8602,7 +8663,7 @@ Label_Retry:
 		V_pc_p = p->usebase + (curpc & p->usemask);
 		V_regs.pc_pLo = V_pc_p - (curpc & m2);
 		V_pc_pHi = V_regs.pc_pLo + m2 + 1;
-		V_regs.pc = curpc - (V_pc_p - V_regs.pc_pLo);
+		V_regs.pc = curpc - (ui5r)(V_pc_p - V_regs.pc_pLo);
 	}
 }
 
@@ -8650,6 +8711,14 @@ LOCALPROC DoCheckExternalInterruptPending(void)
 LOCALPROC do_trace(void)
 {
 	V_regs.TracePending = trueblnr;
+#if Use68020
+	/*
+		m68k_go_MaxCycles will execute exactly one instruction,
+		the one at the current pc, which is the address the
+		format $2 trace frame reports.
+	*/
+	V_regs.ExcInstAddr = m68k_getpc();
+#endif
 	NeedToGetOut();
 }
 
@@ -8674,6 +8743,17 @@ GLOBALPROC m68k_go_nCycles(ui5b n)
 		if (V_regs.ExternalInterruptPending) {
 			V_regs.ExternalInterruptPending = falseblnr;
 			DoCheckExternalInterruptPending();
+		}
+		if (V_regs.Stopped) {
+			/*
+				Executed STOP and no exception has resumed us.
+				Let the rest of this slice pass idle; only an ICT
+				task between slices can raise an interrupt, which
+				m68k_IPLchangeNtfy will flag for the next call.
+			*/
+			V_MaxCyclesToGo = 0;
+			V_regs.MoreCyclesToGo = 0;
+			break;
 		}
 		if (V_regs.t1 != 0) {
 			do_trace();
@@ -8898,6 +8978,7 @@ GLOBALPROC m68k_reset(void)
 
 	V_regs.ExternalInterruptPending = falseblnr;
 	V_regs.TracePending = falseblnr;
+	V_regs.Stopped = falseblnr;
 	V_regs.intmask = 7;
 
 #if Use68020
@@ -8907,6 +8988,10 @@ GLOBALPROC m68k_reset(void)
 	V_regs.cacr = 0;
 	V_regs.caar = 0;
 #endif
+#endif
+
+#if EmFPU
+	FPU_Reset();
 #endif
 
 	Em_Exit();

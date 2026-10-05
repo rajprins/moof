@@ -21,9 +21,12 @@
 	Swift file talks to this type and never touches the C surface
 	directly, which is what keeps C types out of the view layer.
 
-	Reads go straight through to the emulator, which is cheap: the
-	accessors in EMUCTLAP take the emulator lock, and at ordinary
-	speeds that lock is free for most of every tick.
+	Reads go through the emulator lock. The accessors in EMUCTLAP
+	each take it, and at high speeds the emulator thread holds it for
+	most of every tick, so a single accessor can wait up to 1/60 s.
+	refresh therefore makes one pass over all of them, is throttled
+	so that a burst of callers costs one pass, and caches what does
+	not change between passes.
 
 	Writes are requests. The emulator polls the flags they set, so a
 	change here takes effect on a following tick rather than at once.
@@ -32,7 +35,7 @@
 */
 
 import Foundation
-import SwiftUI
+import Combine
 
 /// Emulated speed, as offered in the interface.
 enum EmulatorSpeed: Int, CaseIterable, Identifiable {
@@ -56,6 +59,25 @@ enum EmulatorSpeed: Int, CaseIterable, Identifiable {
 		case .x32: return "32×"
 		case .allOut: return "All Out"
 		}
+	}
+}
+
+/// A drive holding a disk image, as offered in the interface.
+struct DiskDrive: Identifiable, Equatable {
+	/// Zero based drive index.
+	let index: Int
+
+	/// File name of the image, if the emulator knows it.
+	let imageName: String?
+
+	var id: Int { index }
+
+	/// "Disk 1 — System.dsk", or just "Disk 1".
+	var title: String {
+		if let imageName {
+			return "Disk \(index + 1) — \(imageName)"
+		}
+		return "Disk \(index + 1)"
 	}
 }
 
@@ -118,8 +140,8 @@ final class EmulatorBridge: ObservableObject {
 		}
 	}
 
-	/// Which drives currently hold an image.
-	@Published var insertedDrives: [Int] = []
+	/// The drives that currently hold an image.
+	@Published var insertedDrives: [DiskDrive] = []
 
 	/*
 		Guards the didSet observers while state is being pulled back
@@ -130,36 +152,121 @@ final class EmulatorBridge: ObservableObject {
 	*/
 	private var isRefreshing = false
 
+	/*
+		When the last pass over the emulator finished, and the shortest
+		interval between passes. Menu validation and the Settings poll
+		both ask for a refresh, and the menu asks once per item, so
+		without this a twelve item menu would cost twelve passes.
+	*/
+	private var lastRefresh: TimeInterval = -.infinity
+	private let refreshInterval: TimeInterval = 0.05
+
+	/*
+		Image names by drive index, kept from one pass to the next.
+		MNVM_CopyDriveName builds an autorelease pool and a path
+		component string on every call, so a drive is only asked
+		again while its name is unknown, after it has been seen
+		empty, or when the caller forces a refresh. A menu opening
+		forces one, so a swap the poll happened to miss is corrected
+		the next time the user looks.
+	*/
+	private var driveNames: [Int: String] = [:]
+
 	// MARK: reading back
 
 	/// Pulls current emulator state into the published properties.
-	func refresh() {
+	///
+	/// Passes made less than `refreshInterval` after the previous
+	/// one are skipped unless `force` is set. A forced pass also
+	/// rereads every image name, so a caller about to act on the
+	/// state, or showing it after a long gap, gets the truth.
+	func refresh(force: Bool = false) {
+		let now = ProcessInfo.processInfo.systemUptime
+		guard force || now - lastRefresh >= refreshInterval else { return }
+		lastRefresh = now
+
 		isRefreshing = true
 		defer { isRefreshing = false }
 
-		speed = EmulatorSpeed(rawValue: Int(MNVM_GetSpeedValue())) ?? .x1
-		isStopped = MNVM_GetSpeedStopped()
-		magnify = MNVM_GetMagnify()
-		fullScreen = MNVM_GetFullScreen()
-		runInBackground = MNVM_GetRunInBackground()
-		autoSlow = MNVM_GetAutoSlow()
+		/*
+			Assigned only when different. Every assignment to a
+			published property announces a change, and the Settings
+			window refreshes twice a second, so writing unchanged
+			values would redraw it for nothing.
+		*/
+		update(\.speed,
+			EmulatorSpeed(rawValue: Int(MNVM_GetSpeedValue())) ?? .x1)
+		update(\.isStopped, MNVM_GetSpeedStopped())
+		update(\.magnify, MNVM_GetMagnify())
+		update(\.fullScreen, MNVM_GetFullScreen())
+		update(\.runInBackground, MNVM_GetRunInBackground())
+		update(\.autoSlow, MNVM_GetAutoSlow())
 
-		insertedDrives = (0 ..< driveCount).filter {
-			MNVM_GetDriveInserted(Int32($0))
+		if force {
+			driveNames.removeAll()
+		}
+
+		update(\.insertedDrives, (0 ..< driveCount).compactMap { drive in
+			guard MNVM_GetDriveInserted(Int32(drive)) else {
+				driveNames[drive] = nil
+				return nil
+			}
+
+			let name = driveNames[drive] ?? imageName(drive: drive)
+			driveNames[drive] = name
+
+			return DiskDrive(index: drive, imageName: name)
+		})
+	}
+
+	private func update<T: Equatable>(
+		_ property: ReferenceWritableKeyPath<EmulatorBridge, T>,
+		_ value: T)
+	{
+		if self[keyPath: property] != value {
+			self[keyPath: property] = value
 		}
 	}
 
-	var anyDriveInserted: Bool { MNVM_GetAnyDriveInserted() }
+	private func imageName(drive: Int) -> String? {
+		/*
+			Generous for a file name, which macOS limits to 255
+			UTF-16 units, up to three UTF-8 bytes each.
+		*/
+		var buffer = [CChar](repeating: 0, count: 1024)
+
+		guard MNVM_CopyDriveName(Int32(drive), &buffer,
+			Int32(buffer.count)) else { return nil }
+
+		return String(cString: buffer)
+	}
 
 	// MARK: actions
 
 	func reset() { MNVM_PostReset() }
 	func interrupt() { MNVM_PostInterrupt() }
-	func insertDisk() { MNVM_PostInsertDisk() }
+	func insertDisk() {
+		MNVM_PostInsertDisk()
+		driveNames.removeAll()
+	}
 	func requestQuit() { MNVM_PostQuit() }
+
+	/// Whether the guest has mounted the disk, and so expects to be
+	/// the one to eject it.
+	func isMountedByGuest(drive: Int) -> Bool {
+		MNVM_GetDriveMountedByGuest(Int32(drive))
+	}
+
+	/// The image a drive holds now, which may differ from what was
+	/// shown to the user a moment ago.
+	func currentDrive(_ drive: Int) -> DiskDrive? {
+		guard MNVM_GetDriveInserted(Int32(drive)) else { return nil }
+		return DiskDrive(index: drive, imageName: imageName(drive: drive))
+	}
 
 	func eject(drive: Int) {
 		MNVM_PostEjectDrive(Int32(drive))
-		refresh()
+		driveNames[drive] = nil
+		refresh(force: true)
 	}
 }

@@ -22,7 +22,7 @@
 #define kStrAppAbbrev "moof" /* [a-z0-9_]{1,8} */
 #define MajorVersion 37
 #define MinorVersion 03
-#define kStrCopyrightYear "2020"
+#define kStrCopyrightYear "2026"
 #define kMacCreatorSig "MOOF"
 #define kBundleIdentifier "io.github.rajprins.moof"
 #define kShortDescription "miniature Macintosh emulator"

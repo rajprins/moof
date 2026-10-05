@@ -89,10 +89,8 @@ static void DoOSGLUdepends(tDoOneDepends p)
 		}
 		p(kDepDirCnfg, "LOCALTLK.h");
 	}
-	if (WantAltKeysMode) {
-		p(kDepDirCSrc, "ALTKEYSM.h");
-	}
-	p(kDepDirCSrc, "CONTROLM.h");
+	p(kDepDirCSrc, "KEYRMPMC.h");
+	p(kDepDirCSrc, "ROMVALID.h");
 }
 
 static void DoMINEM68Kdepends(tDoOneDepends p)
@@ -162,11 +160,8 @@ static void DoAllSrcFiles(tDoOneCFile p)
 	p("LTOVRUDP", kDepDirCSrc,
 		CSrcFlagsUseHdrIf(WantLocalTalk && (gbk_lto_udp == gbo_lto)),
 		nullpr);
-	p("ALTKEYSM", kDepDirCSrc,
-		CSrcFlagsUseHdrIf(WantAltKeysMode), nullpr);
-	p("ACTVCODE", kDepDirCSrc,
-		CSrcFlagsUseHdrIf(WantActvCode), nullpr);
-	p("CONTROLM", kDepDirCSrc, kCSrcFlgmNoSource, nullpr);
+	p("KEYRMPMC", kDepDirCSrc, kCSrcFlgmNoSource, nullpr);
+	p("ROMVALID", kDepDirCSrc, kCSrcFlgmNoSource, nullpr);
 	p("SCRNMAPR", kDepDirCSrc,
 		CSrcFlagsUseHdrIf(WantSCRNMAPR), nullpr);
 	p("SCRNTRNS", kDepDirCSrc,
@@ -182,7 +177,7 @@ static void DoAllSrcFiles(tDoOneCFile p)
 		The Swift/Objective-C boundary. EMUCTLAP declares the
 		narrow C surface that Swift is allowed to touch, and
 		CCOBRIDG is the bridging header that exposes it. Neither
-		may pull in the unity build headers such as CONTROLM.h,
+		may pull in the unity build headers such as COMOSGLU.h,
 		which are implementation included once into OSGLUCCO.m
 		and guard against a second inclusion.
 	*/

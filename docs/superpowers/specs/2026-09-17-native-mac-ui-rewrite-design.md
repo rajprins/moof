@@ -5,7 +5,7 @@ Status: Approved for planning
 
 ## Summary
 
-Replace the Cocoa backend of Mini vMac with a modern, fully native macOS
+Replace the inherited Cocoa backend with a modern, fully native macOS
 host layer: AppKit + SwiftUI chrome, Metal rendering, and the emulator
 core running on its own thread under a normal AppKit run loop.
 
@@ -17,8 +17,8 @@ generator in `setup/` that must learn to emit Swift.
 
 The original request asked to identify non-Apple UI toolkits that could
 be replaced with SwiftUI. There are none. The application links exactly
-three frameworks (`minivmac.xcodeproj/project.pbxproj:29-31`): AppKit,
-AudioUnit, and OpenGL. The SDL backends carried by upstream Mini vMac
+three frameworks (`moof.xcodeproj/project.pbxproj:29-31`): AppKit,
+AudioUnit, and OpenGL. The SDL backends carried by the upstream emulator
 were already removed during the Apple Silicon reduction, as recorded in
 `setup/GNBLDOPT.i:796`: "Only the Cocoa backend ("cco",
 src/OSGLUCCO.m) remains."
@@ -157,7 +157,7 @@ are 8 uppercase characters, matching the project's existing convention
 | `HOSTFILE.m` | Drives, ROM loading, `NSOpenPanel` |
 | `SNDCOREA.m` | CoreAudio, lifted near-verbatim |
 | `KEYRMPMC.h` | `Keyboard_RemapMac`, `Keyboard_UpdateKeyMap2`, `DisconnectKeyCodes2` |
-| `ROMVALID.h` | `ROM_IsValid`, `Calc_Checksum`, `WaitForRom`, ROM warning messages |
+| `ROMVALID.h` | `ROM_IsValid`, `Calc_Checksum`, `WaitForRom`, ROM and unsupported disk warnings, `MacMsgOverride` |
 | `CCOBRIDG.h` | Obj-C ↔ Swift bridging header |
 | `EMUBRIDG.swift` | Observable emulator state, the sole C boundary for Swift |
 | `SETTINGS.swift` | Settings window content |
@@ -166,8 +166,9 @@ are 8 uppercase characters, matching the project's existing convention
 
 `CONTROLM.h` is deleted. Its cell drawing and ⌃-mode state machine go
 away; `KEYRMPMC.h` and `ROMVALID.h` receive the logic that must survive.
-`GetCurDrawBuff` collapses to returning `screencomparebuff` directly,
-since there is no longer an overlay buffer to choose between.
+`GetCurDrawBuff` is gone: the `SCRNMAPR.h`/`SCRNTRNS.h` instantiations
+read `screencomparebuff` directly, since there is no longer an overlay
+buffer to choose between.
 
 ## §2 Rendering
 
@@ -285,20 +286,34 @@ rejects outright. ARC adoption therefore lands together with the
 split of that file, not before it. Until then new files are written
 MRR correct, as `MTLRENDR.m` is.
 
-### Localization is not touched
+### Localization keeps its format
 
 `INTLCHAR.h` implements a custom substitution format across 11 languages
-(for example `kStrNewCntrlKey "Emulated ;]^m;} key ^k."`, where `;]` and
-`^m` are its own escape syntax). Converting this to `.strings` catalogs
-would risk 11 translations for no user-visible gain.
-`NSStringCreateFromSubstCStr` is exposed through the bridging header and
-SwiftUI views receive already-localized `String` values.
+(for example `kStrNoROMMessage "I can not find the ROM image file
+;[^r;{. …"`, where `;[` and `^r` are its own escape syntax). Converting
+this to `.strings` catalogs would risk 11 translations for no
+user-visible gain, so the format and the `STRCN*.h` files stay.
+
+Their content did change with the overlay's removal. Every string that
+only the overlay drew (the Control Mode screens, its About and help
+text, the menu titles of the old hand-built menu bar) was deleted, so
+each language now defines the same 25 macros: the alert titles and
+messages, and `kStrCmdQuit` for the fatal alert's button. The quit
+warning and the missing-ROM message were rewritten in every language
+to describe the native interface, naming the guest Finder's localized
+Special menu and Shut Down item where those are known and the English
+names otherwise. The 8x16 glyph bitmaps and drawing-only cells went
+from `INTLCHAR.h`, along with the substitution codes that only fed
+overlay screens (`^c ^m ^k ^g ^f ^b ^h ^l ^s`).
+
+The native menus themselves are English for now. `NSStringCreateFromSubstCStr`
+remains the path by which a translated string reaches AppKit.
 
 ## §4 Build generator changes
 
 The Xcode project is a generated artifact. `build.sh:8-14` deletes
-`./minivmac*`, `./cfg` and `./build` on every run, so hand-edits to
-`minivmac.xcodeproj` are discarded. Xcode is the only supported output
+`./moof*`, `./cfg` and `./build` on every run, so hand-edits to
+`moof.xcodeproj` are discarded. Xcode is the only supported output
 (`setup/GNBLDOPT.i:705-709`); no Makefile is emitted, and the
 `rm -rf ./Makefile` at `build.sh:10` is vestigial from upstream, which
 supports Makefile output for other platforms. There is therefore only
@@ -339,7 +354,7 @@ questions that could invalidate the design are answered first.
 **Checkpoint 1 — Swift in a generated project. Resolved, passed.**
 `EMUBRIDG.swift` compiles and links in a project emitted by the
 generator. Objective-C reaches Swift through the generated
-`minivmac-Swift.h`, and Swift reaches C through `CCOBRIDG.h`. Verified
+`EmuBridge-Swift.h`, and Swift reaches C through `CCOBRIDG.h`. Verified
 at runtime: the bridge reported `speed exponent 4`, which is the value
 `build.sh` passes as `-speed 4`, so a real emulator global crossed both
 directions rather than a stub.
@@ -384,7 +399,7 @@ Run on 2026-09-17 against the threaded build. There is no TSan option
 in the generator; the build is produced by overriding settings on the
 command line, so nothing about this diagnostic is baked into `setup/`:
 
-    xcodebuild -project minivmac.xcodeproj -configuration Release \
+    xcodebuild -project moof.xcodeproj -configuration Release \
       OTHER_CFLAGS="-fsanitize=thread -g -fno-omit-frame-pointer" \
       OTHER_LDFLAGS="-fsanitize=thread" \
       OTHER_SWIFT_FLAGS="-sanitize=thread" \
@@ -407,39 +422,54 @@ initialised through `pthread_once` rather than behind a flag read from
 two threads, and `gFinished` is `_Atomic` rather than `volatile`,
 which orders nothing.
 
-**Found, not fixed: the audio boundary is unsynchronised.** Every
-remaining race is between emulator sound state and CoreAudio's render
-thread, which `MySound_Init` creates through
-`HALB_IOThread::DispatchPThread`:
+**Found and fixed: the audio boundary was unsynchronised.** The
+first run reported every remaining race between emulator sound state
+and CoreAudio's render thread (`HALB_IOThread::DispatchPThread`): the
+sample stores into `TheSoundBuffer` from `ASC_SubTick`, and the
+`volatile` `TheFillOffset`, `MinFilledSoundBuffs` and `cur_audio`
+fields. They were pre-existing (before the thread move the same races
+ran between the main thread and the render thread), and `volatile`
+orders nothing between threads. There was also a logic race: on
+overflow `MySound_BeginWrite` rewound `TheWriteOffset` by a block and
+rewrote one already published to the render thread.
 
-| Site | State |
-|---|---|
-| `ASCEMDEV.c:763`, `:774` in `ASC_SubTick` | emulated Apple Sound Chip |
-| `OSGLUCCO.m:1949` in `MySound_WroteABlock` | `TheFillOffset` |
-| `OSGLUCCO.m:1985`, `:2004` in `MySound_SecondNotify0` | `MinFilledSoundBuffs` |
-| `OSGLUCCO.m:2229` in `MySound_Stop` | `cur_audio` |
+Fixed entirely in the host, in the sound section of `OSGLUCCO.m`, with
+no change to the core (which only writes inside the span it is handed)
+and no lock on the render side:
 
-These are pre-existing: the sound code has never had any
-synchronisation, and before the thread move the same races existed
-between the main thread and the render thread. The thread move
-relocated one end without creating them. Two of them are in the
-emulator core, so the audio callback is reaching into emulated device
-state directly.
+- `TheFillOffset` and `ThePlayOffset` are `_Atomic`. The producer
+  publishes the fill offset with release after the block is written and
+  converted; the callback loads it with acquire, copies, and publishes
+  the play offset with release; `MySound_BeginWrite` loads that with
+  acquire.
+- Overflow is decided once per block: if no whole block is free, the
+  block is written into a private scratch block (the spare `kOneBuffSz`
+  at the end of the allocation, never reached by masked ring accesses)
+  and dropped on completion, counted in `SoundBlocksDropped`. Published
+  samples are never rewritten.
+- `MinFilledSoundBuffs` is updated with a CAS minimum in the callback
+  and an atomic exchange in `MySound_SecondNotify0`, so pacing is
+  unchanged in effect but no minimum is lost.
+- `wantplaying`, `HaveStartedPlaying` and `lastv` are `_Atomic`; the
+  stop handshake (clear `wantplaying`, wait for `lastv` to ramp to
+  centre) is release/acquire.
 
-**The coarse emulator lock does not and must not cover this.** A
-realtime audio render thread that blocks on a lock held by the
-emulator would produce dropouts and priority inversion. This boundary,
-unlike the host boundary, is genuinely narrow — a stream of samples —
-so it is the one place where a lock free ring buffer is the right
-tool. That work belongs with the `SNDCOREA.m` extraction.
+Re-run on 2026-10-03: zero TSan reports over about three and a half
+minutes booting System 6.0.8, with sound stopped and restarted through
+`SpeedStopped` and `RunInBackground` while the run was live. In the
+ordinary build the ring was checked with a debugger: offsets advance
+in lockstep, and with the output unit stopped by hand the producer
+dropped 710 blocks into scratch, then recovered without stalling when
+the unit restarted. Audio output itself was not listened to.
 
-Until then the races are real but longstanding, and the same ones
-shipped in every previous build.
-
-**Shutdown under TSan is unreliable**: one run aborted with SIGABRT
-and another did not exit within 60 s, whereas the ordinary build exits
-0 every time. `MySound_Stop` racing the render thread is the obvious
-suspect, but that is a hypothesis, not a diagnosis.
+**Shutdown under TSan**: `kill -TERM` exits promptly (status 143).
+A scripted quit with no disk mounted timed out (-1712), but not in the
+sound code: `sample` showed the main thread waiting in
+`frameTick` → `EmuLock_Acquire` for the whole run, starved by an
+emulator thread that at -O0 under TSan cannot keep up with real time
+and so barely releases the lock. The ordinary build quits the same way
+with status 0. Lock fairness under load is an `EMUTHRED.m` question and
+is left open here.
 
 **Not yet exercised:** `EmuLock_Yield`, the "all out" speed path.
 Nothing in the run drove the emulator into that mode, so the one place
@@ -460,10 +490,11 @@ verified by running the app, not only by compiling it.
 | Framework swap, config includes | `USFILDEF.i`, `WRCNFGAP.i` |
 | Emulator on its own thread, AppKit owns main | `EMUTHRED.h`, `EMUTHRED.m`, `OSGLUCCO.m` |
 | Native menu bar, SwiftUI Settings and About | `APPMENUS.swift`, `SETTINGS.swift`, `ABOUTPNL.swift`, `EMUCTLAP.h`, `EMUBRIDG.swift` |
+| `CONTROLM.h` split, overlay deleted | `KEYRMPMC.h`, `ROMVALID.h`, `INTLCHAR.h`, `STRCN*.h`, `SPBLDOPT.i`, `SPCNFGAP.i`, `GNBLDOPT.i`, `SPFILDEF.i` |
 
 The thread move is in place and verified. `main` now runs `[NSApp run]`
 for the life of the process; `ProgramMain` runs on a thread named
-"minivmac emulator". `WaitForNextTick` only paces and releases the
+"moof emulator". `WaitForNextTick` only paces and releases the
 lock while sleeping. Events arrive through a `MyClassApplication`
 override of `sendEvent:`, which takes the lock and asks
 `ProcessOneSystemEvent` whether the emulator consumed the event,
@@ -497,7 +528,7 @@ about because they are easy to reintroduce:
    `wantsLayer = YES`, or AppKit treats the view as layer-backed and
    contends for layer ownership.
 
-The chrome is in. The menu bar is Apple / Mini vMac / File / Machine /
+The chrome is in. The menu bar is Apple / Moof / File / Machine /
 View / Window, with Control key equivalents because the guest takes
 every Command keystroke. Check marks and enablement are answered in
 `validateMenuItem` rather than pushed, since the emulator changes that
@@ -518,11 +549,36 @@ accessibility API, and the Settings window renders with live values
 read out of the emulator — it showed 16x, which is the `-speed 4` the
 build was generated with.
 
+The overlay is gone. `CONTROLM.h`, `ALTKEYSM.h` and `ACTVCODE.h` are
+deleted, and with them the overlay's framebuffer copy
+(`CntrlDisplayBuff`), which also leaves `ChooseTotMemSize`. What had to
+survive was split out: key remapping into `KEYRMPMC.h`, ROM validation
+and the startup wait for a ROM into `ROMVALID.h`. Behaviour changes:
+
+- The host Control key now reaches the guest as its Control key. It
+  used to map to `CM`, the key that entered Control Mode. Menu key
+  equivalents are still matched in `sendEvent:` first, so only
+  unclaimed ⌃ chords reach the guest. `-ccs` now plainly exchanges
+  Control and Command.
+- Removed setuptool options, each of which only configured the
+  overlay: the `-km … CM` destination, `-ekt` (emulated Control toggle
+  key), `-eck`, `-eci`, `-ecr`, `-iid`, `-akm` (alternate keyboard
+  mode), and the upstream licensing features `-dmo` and `-act`. The
+  build scripts pass none of them.
+- With no ROM, `WaitForRom` raises an ordinary `MacMsg`, presented as
+  an `NSAlert`, telling the user to drop a ROM on the window or use
+  File ▸ Open Disk Image…, instead of drawing into the guest screen.
+  Verified by running a ROM-less copy: the alert appears, and the
+  process exits promptly on `kill`.
+
+`EnableDemoMsg` is still emitted, fixed at 0, only because
+`WaitForNextTick` tests it with `#if` under `-Wundef`; it can go once
+that test is removed.
+
 **Not done.**
 
 | Area | Files |
 |---|---|
-| `CONTROLM.h` split, overlay deleted | `KEYRMPMC.h`, `ROMVALID.h` |
 | Native fullscreen | `OSGLUCCO.m` |
 | `NSAlert`, deprecation sweep, ARC | all |
 | Backend split | `HOSTFILE.m`, `SNDCOREA.m` |
@@ -530,6 +586,98 @@ build was generated with.
 A copy of `extras/roms/MacII.ROM` sits at the repository root so the
 app can be launched for testing. It is ignored by `.gitignore`
 (`/*.ROM`).
+
+## Runtime verification, 2026-10-03
+
+Run against the native-mac-ui branch after the six-way fan-out
+(audio, cpu, devices, host, localtalk, overlay) was integrated. Each
+row was exercised in the running app, with the guest screen captured
+by window id (`screencapture -l`) so overlapping windows cannot taint
+the result, and the emulator state read through `lldb` where the
+screen alone was ambiguous.
+
+| Check | Result |
+|---|---|
+| Boot to desktop, 4 MB and 32 MB | OK |
+| Machine › Reset, twice in a row | OK, after the fix below |
+| Machine › Interrupt | OK, debugger prompt; `G` resumes |
+| Speed 1×/4×/8×/All Out radio state | OK |
+| Pause / resume stops and restarts the audio unit | OK (`cur_audio.wantplaying` 1 → 0 → 1) |
+| Audio ring buffer advances while running | OK |
+| Open Disk Image… with an unrecognised image | OK, native "Unsupported Disk Image" alert |
+| Second HFS image mounts; File › Eject lists both | OK |
+| Host eject of a guest-mounted disk | OK, "Eject Anyway" sheet, drive empties |
+| Guest eject (⌘E on the icon) | OK, host menu updates |
+| Quit with a disk mounted | OK, warning alert, process stays up |
+| Settings window | OK |
+| LocalTalk over UDP, built with `-lt -lto udp` | OK at the transport level: socket on 1954, joined 239.192.76.84, `LT_ReceivePacket` parses an injected frame, `LT_TransmitPacket` reaches a host listener |
+
+Not exercised: a guest-to-guest AppleTalk session through the Chooser,
+and the BPF transport. Driving the guest menu bar from a script needs
+a sustained press, which synthetic CGEvents did not deliver reliably,
+so that part was left to a manual test.
+
+### Warm reset hung in the ROM Test Manager
+
+`Machine › Reset` left the guest frozen on its last frame. The CPU was
+alive and looping at ROM `0x40802edc`, the serial Test Manager. An
+instruction trace of the ROM's RAM sizing routine (`0x40803944`) on a
+cold boot and after a reset showed the difference: cold boot reads VIA2
+port A bits 6 and 7 as a 16 MB bank and finds 32 MB of RAM; after a
+reset it read a 4 MB bank and found only 8 MB, because those pins live
+in `Wires[]` and `VIA2_Zap` clears the VIA registers but not the pins.
+The probe at the top of RAM then failed and the ROM parked itself.
+
+The fix in `EmulatedHardwareZap` sets every wire to 1 before
+`Memory_Reset` rebuilds the memory map, which is the state
+`AddrSpac_Init` starts from. The same hang reproduces on the
+pre-rewrite master, so this is an upstream emulator bug, not a
+regression from the rewrite, and is a candidate for a second pull
+request to the upstream project alongside the LocalTalk one. The commit
+is `a7e6acb`.
+
+A code review of the core afterwards found a second gap in the same
+path: the VIA and SCC zaps write their interrupt request wires to 0
+directly, so the CPU's derived interrupt level was never recomputed
+and stayed at whatever a device had asserted when Reset was clicked.
+`EmulatedHardwareZap` now calls `VIAorSCCinterruptChngNtfy` after
+the zaps.
+
+Two earlier guesses were wrong and are recorded so they are not tried
+again: clearing the wires to 0 selects a different wrong bank, and
+calling `Vid_Reset` on reset changes nothing.
+
+### Release builds are fully stripped
+
+The generated project sets `STRIP_INSTALLED_PRODUCT`,
+`DEPLOYMENT_POSTPROCESSING` and `STRIPFLAGS = -u -r`, so a `./build.sh`
+binary has no symbols and `lldb` cannot read a single global. Every
+debugging session today began by rebuilding with those turned off.
+Both the Thread Sanitizer run and this one used the same override
+rather than a generator option, so nothing is baked into `setup/`:
+
+```sh
+xcodebuild -project moof.xcodeproj -configuration Release \
+    STRIP_INSTALLED_PRODUCT=NO DEPLOYMENT_POSTPROCESSING=NO \
+    GCC_OPTIMIZATION_LEVEL=0 DEBUG_INFORMATION_FORMAT=dwarf \
+    GCC_GENERATE_DEBUGGING_SYMBOLS=YES \
+    CONFIGURATION_BUILD_DIR=/tmp/sym
+```
+
+`GCC_GENERATE_DEBUGGING_SYMBOLS=YES` is the one that matters for
+struct layouts; without it the binary keeps symbol names but no DWARF,
+and `p regs.pc` fails. A `--debug` flag on `build.sh` that passes these
+would be a small, worthwhile follow-up.
+
+### Testing notes
+
+- A second Moof instance (the user's own) was running throughout.
+  Capturing a screen rectangle picked up whichever window was on top;
+  capturing by window id did not. `pgrep -f` on a relative app path
+  also matched nothing, so launch test copies by absolute path.
+- The emulator pauses when its window is not key unless Run in
+  Background is on. A reset posted while another app is frontmost is
+  queued, not lost, and runs when the window becomes key again.
 
 ## Out of scope
 

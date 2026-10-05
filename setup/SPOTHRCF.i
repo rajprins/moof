@@ -661,14 +661,11 @@ LOCALPROC WriteAppCNFUDPICcontents(void)
 	}
 	WriteEndDestFileLn();
 
-	if (CurOfficialBin) {
-		/*
-			As with the other arm64 code generation hints, this is
-			still gated on -ob. See the note in WRCNFGGL.i.
-		*/
-		WriteBlankLineToDestFile();
-		WriteDestFileLn("#define r_pc_p \"x15\"");
-	}
+	/*
+		-ob used to also emit #define r_pc_p "x15", making the
+		emulated pc a global register variable. That isn't sound
+		on AArch64, see the note on HaveGlbReg in WRCNFGGL.i.
+	*/
 
 	WriteBlankLineToDestFile();
 

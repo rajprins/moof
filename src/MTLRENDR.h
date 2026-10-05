@@ -59,13 +59,30 @@ extern void MTLRenderer_Resize(double ptWidth, double ptHeight,
 	double backingScale);
 
 /*
-	Uploads the frame and draws it. isColor selects between the
-	32 bit colour layout and the 8 bit monochrome layout. The src
-	rectangle is in guest pixels and selects the visible region,
-	which differs from the whole screen only when panning in full
-	screen.
+	Presenting a frame is two calls, so that the caller can hold its
+	lock over the first and not the second.
+
+	MTLRenderer_Upload copies the frame into the renderer's texture
+	and records which rectangle of it to show. isColor selects
+	between the 32 bit colour layout and the 8 bit monochrome layout.
+	The src rectangle is in guest pixels and selects the visible
+	region, which differs from the whole screen only when panning in
+	full screen. After it returns the caller's pixel buffer is no
+	longer read, so whatever protected that buffer may be released.
+
+	MTLRenderer_Draw takes the next drawable, encodes the pass that
+	stretches the uploaded rectangle over it, and commits. It reads
+	only renderer state, so it needs no lock of the caller's. It
+	draws what the latest Upload left behind, and does nothing if
+	there has been no Upload since the last Draw.
+
+	Both must be called on the main thread: the texture copy is
+	only safe while the drawable is not being written, and the
+	layer belongs to AppKit.
 */
-extern void MTLRenderer_Present(const void *pixels, bool isColor,
+extern void MTLRenderer_Upload(const void *pixels, bool isColor,
 	int srcX, int srcY, int srcW, int srcH);
+
+extern void MTLRenderer_Draw(void);
 
 #endif /* MTLRENDR_H */

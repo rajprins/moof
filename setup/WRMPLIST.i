@@ -133,24 +133,10 @@ LOCALPROC WriteInfoPList(MyProc p)
 	CurPListFormat = kPListRaw;
 
 	WriteDestFileLn("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
-#if 0
 	WriteDestFileLn(
-		"<!DOCTYPE plist SYSTEM \"file://"
-		"localhost/System/Library/DTDs/PropertyList.dtd\">");
-	WriteDestFileLn("<plist version=\"0.9\">");
-#else
-	if (ide_vers >= 3100) {
-		WriteDestFileLn(
-			"<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\""
-			" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">");
-	} else {
-		WriteDestFileLn(
-			"<!DOCTYPE plist PUBLIC \"-//"
-			"Apple Computer//DTD PLIST 1.0//EN\""
-			" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">");
-	}
+		"<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\""
+		" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">");
 	WriteDestFileLn("<plist version=\"1.0\">");
-#endif
 
 	p();
 
@@ -234,7 +220,11 @@ LOCALPROC WriteMyInfoPListContents(void)
 		WritePListKeyProcString("CFBundleSignature",
 			Write_MacCreatorSigOrGeneric);
 		WritePListKeyProcString("CFBundleVersion", WriteVersionStr);
-		WritePListKeyString("LSMinimumSystemVersion", "10.15");
+		/*
+			Must match MACOSX_DEPLOYMENT_TARGET in WRXCDFLS.i,
+			which explains why it is 14.0.
+		*/
+		WritePListKeyString("LSMinimumSystemVersion", "14.0");
 		WritePListKeyString("NSHighResolutionCapable", "1");
 		if (WantGraphicsSwitching) {
 			WritePListKeyString("NSSupportsAutomaticGraphicsSwitching",

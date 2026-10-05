@@ -296,7 +296,7 @@ LOCALFUNC blnr FindFirstChangeInLVecs(uibb *ptr1, uibb *ptr2,
 	for (i = L; i != 0; --i) {
 		if (*p1++ != *p2++) {
 			--p1;
-			*j = p1 - ptr1;
+			*j = (uimr)(p1 - ptr1);
 			return trueblnr;
 		}
 	}
@@ -314,7 +314,7 @@ LOCALPROC FindLastChangeInLVecs(uibb *ptr1, uibb *ptr2,
 
 	while (*--p1 == *--p2) {
 	}
-	*j = p1 - ptr1;
+	*j = (uimr)(p1 - ptr1);
 }
 
 LOCALPROC FindLeftRightChangeInLMat(uibb *ptr1, uibb *ptr2,
@@ -629,12 +629,17 @@ LOCALVAR si4b ScreenChangedLeft;
 LOCALVAR si4b ScreenChangedBottom;
 LOCALVAR si4b ScreenChangedRight;
 
+/*
+	The empty rectangle: Top above Bottom and Left beyond Right, so
+	that the first change Screen_OutputFrame records simply becomes
+	the rectangle. A consumer must test Bottom > Top before using it.
+*/
 LOCALPROC ScreenClearChanges(void)
 {
-	ScreenChangedTop = 0;
-	ScreenChangedBottom = vMacScreenHeight;
-	ScreenChangedLeft = 0;
-	ScreenChangedRight = vMacScreenWidth;
+	ScreenChangedTop = vMacScreenHeight;
+	ScreenChangedBottom = 0;
+	ScreenChangedLeft = vMacScreenWidth;
+	ScreenChangedRight = 0;
 }
 
 LOCALPROC ScreenChangedAll(void)
@@ -1267,10 +1272,10 @@ GLOBALOSGLUPROC WarnMsgAbnormalID(ui4r id)
 	cryptographic rigor not claimed. or any rigor.
 
 	there is code for a serious implementation of an entropy
-	pool in the Mini vMac extra "MakeRand" (adapted from
+	pool in the upstream extra "MakeRand" (adapted from
 	MacPGP), but it seems massive overkill for the purpose
 	here - minimizing the chance that two instances of
-	Mini vMac pick the same LT_NodeHint and LT_MyStamp.
+	Moof pick the same LT_NodeHint and LT_MyStamp.
 */
 
 LOCALVAR ui5b e_p[2] = {

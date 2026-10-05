@@ -1,4 +1,4 @@
-Mini vMac: mydriver/README
+Moof: mydriver/README
 Paul C. Pratt
 www.gryphel.com
 February 23, 2002
@@ -10,13 +10,13 @@ into the emulated rom.
 The compiled driver is already in ROMEMDEV.c
 (the initialization of sony_driver variable),
 so this source code is not needed for building
-Mini vMac. It is only needed if you want
+Moof. It is only needed if you want
 to change this driver.
 
 To compile the driver, use MPW commands
 such as:
 
-set srcdir hd4:Topaz:MinivMac:mydriver:
+set srcdir hd4:Topaz:Moof:mydriver:
 asm -case on {srcdir}mydriver.a -o {srcdir}mydriver.a.o
 c {srcdir}mydriver.c -r -b -mbg off -opt full -o {srcdir}mydriver.c.o
 link {srcdir}mydriver.a.o {srcdir}mydriver.c.o -rt DRVR=128 -o {srcdir}mydriver

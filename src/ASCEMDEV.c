@@ -728,17 +728,10 @@ label_retry:
 
 #if MySoundEnabled
 
-#if 1
 				i0 = ((phase0 + 0x4000) >> 15) & 0x1FF;
 				i1 = ((phase1 + 0x4000) >> 15) & 0x1FF;
 				i2 = ((phase2 + 0x4000) >> 15) & 0x1FF;
 				i3 = ((phase3 + 0x4000) >> 15) & 0x1FF;
-#else
-				i0 = ((phase0 + 0x8000) >> 16) & 0x1FF;
-				i1 = ((phase1 + 0x8000) >> 16) & 0x1FF;
-				i2 = ((phase2 + 0x8000) >> 16) & 0x1FF;
-				i3 = ((phase3 + 0x8000) >> 16) & 0x1FF;
-#endif
 
 				v = ASC_SampBuff[i0]
 					+ ASC_SampBuff[0x0200 + i1]

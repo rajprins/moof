@@ -821,41 +821,6 @@ LOCALPROC WrtOptSaveDialogEnable(void)
 }
 
 
-/* option: Insert Ith Disk Image */
-
-LOCALVAR blnr WantInsertIthDisk;
-LOCALVAR ui3r olv_InsertIthDisk;
-
-LOCALPROC ResetInsertIthDisk(void)
-{
-	WantInsertIthDisk = nanblnr;
-	olv_InsertIthDisk = 0;
-}
-
-LOCALFUNC tMyErr TryAsInsertIthDisk(void)
-{
-	return BooleanTryAsOptionNot("-iid",
-		&WantInsertIthDisk, &olv_InsertIthDisk);
-}
-
-#define dfo_InsertIthDisk() falseblnr
-
-LOCALFUNC tMyErr ChooseInsertIthDisk(void)
-{
-	if (nanblnr == WantInsertIthDisk) {
-		WantInsertIthDisk = dfo_InsertIthDisk();
-	}
-
-	return kMyErr_noErr;
-}
-
-LOCALPROC WrtOptInsertIthDisk(void)
-{
-	WrtOptBooleanOption("-iid",
-		WantInsertIthDisk, dfo_InsertIthDisk());
-}
-
-
 /* option: Command Option Swap */
 
 LOCALVAR blnr WantCmndOptSwap;
@@ -917,11 +882,6 @@ enum {
 	gbk_keynam_ROption,
 	gbk_keynam_RShift,
 	kNumSrcKeyNames
-};
-
-enum {
-	gbk_keynam_CM = kNumKeyNames,
-	kNumDstKeyNames
 };
 
 LOCALVAR ui3r gbo_keymap[kNumSrcKeyNames];
@@ -1038,21 +998,14 @@ LOCALFUNC char * GetSrcKeyMapName(int i)
 	return s;
 }
 
-LOCALFUNC char * GetDstKeyMapName(int i)
-{
-	char *s;
-
-	switch (i) {
-		case gbk_keynam_CM:
-			s = "CM";
-			break;
-		default:
-			s = GetKeyMapName(i);
-			break;
-	}
-
-	return s;
-}
+/*
+	The destination of a mapping is a key of the emulated keyboard.
+	There used to be one extra destination, "CM", the host key that
+	entered the Control Mode overlay. The overlay is gone, so the
+	destinations are now exactly the key names.
+*/
+#define kNumDstKeyNames kNumKeyNames
+#define GetDstKeyMapName GetKeyMapName
 
 LOCALFUNC tMyErr TryAsKeyMapOptionNot(void)
 {
@@ -1123,10 +1076,16 @@ LOCALPROC dfo_keymap(ui3r *a)
 {
 	uimr i;
 
+	/*
+		Control used to map to CM, the Control Mode overlay, so the
+		emulated computer could only get a Control key through the
+		"emulated control toggle". With the overlay gone, Control is
+		Control. "-ccs" now plainly exchanges Control and Command.
+	*/
 	dfo_keyset(a, gbk_keynam_Control,
-		WantCmndOptSwap ? gbk_keynam_Command : gbk_keynam_CM);
+		WantCmndOptSwap ? gbk_keynam_Command : gbk_keynam_Control);
 	dfo_keyset(a, gbk_keynam_Command,
-		WantCmndOptSwap ? gbk_keynam_CM : gbk_keynam_Command);
+		WantCmndOptSwap ? gbk_keynam_Control : gbk_keynam_Command);
 
 	for (i = gbk_keynam_Option; i <= gbk_keynam_ForwardDel; ++i) {
 		dfo_keyset(a, i, i);
@@ -1145,38 +1104,13 @@ LOCALPROC dfo_keymap(ui3r *a)
 	dfo_keyset(a, gbk_keynam_RShift, gbo_keymap[gbk_keynam_Shift]);
 }
 
-LOCALFUNC ui3r KeyMapInverse(uimr v)
-{
-	uimr i;
-
-	for (i = 0; i < kNumSrcKeyNames; ++i) {
-		if (v == gbo_keymap[i]) {
-			return i;
-		}
-	}
-
-	return 0xFF;
-}
-
-LOCALVAR ui3r ControlModeKey;
-
 LOCALFUNC tMyErr ChooseKeyMap(void)
 {
-	tMyErr err;
 	ui3r a[kNumSrcKeyNames];
 
 	dfo_keymap(a);
 
-	ControlModeKey = KeyMapInverse(gbk_keynam_CM);
-
-	if (0xFF == ControlModeKey) {
-		err = ReportParseFailure(
-			"-km : no key maps to CM");
-	} else {
-		err = kMyErr_noErr;
-	}
-
-	return err;
+	return kMyErr_noErr;
 }
 
 LOCALPROC WrtOptKeyMap(void)
@@ -1197,90 +1131,16 @@ LOCALPROC WrtOptKeyMap(void)
 }
 
 
-/* option: emulated key toggle mapping */
-
-LOCALVAR int gbo_EKTMap;
-LOCALVAR ui3r olv_EKTMap;
-
-LOCALPROC ResetEKTMapOption(void)
-{
-	gbo_EKTMap = kListOptionAuto;
-	olv_EKTMap = 0;
-}
-
-LOCALFUNC tMyErr TryAsEKTMapOptionNot(void)
-{
-	return FindNamedOption("-ekt",
-		kNumKeyNames, GetKeyMapName, &gbo_EKTMap, &olv_EKTMap);
-}
-
-LOCALFUNC int dfo_EKTMap(void)
-{
-	blnr a[kNumKeyNames];
-	uimr i;
-	uimr j;
-
-	for (i = 0; i < kNumKeyNames; ++i) {
-		a[i] = falseblnr;
-	}
-
-	for (i = 0; i < kNumSrcKeyNames; ++i) {
-		j = gbo_keymap[i];
-		if (j < kNumKeyNames) {
-			a[j] = trueblnr;
-		}
-	}
-
-	for (i = 0; i < kNumKeyNames; ++i) {
-		if (! a[i]) {
-			return i;
-		}
-	}
-
-	return gbk_keynam_Control;
-}
-
-LOCALFUNC tMyErr ChooseEKTMap(void)
-{
-	if (kListOptionAuto == gbo_EKTMap) {
-		gbo_EKTMap = dfo_EKTMap();
-	}
-
-	return kMyErr_noErr;
-}
-
-LOCALPROC WrtOptEKTMap(void)
-{
-	WrtOptNamedOption("-ekt", GetKeyMapName, gbo_EKTMap, dfo_EKTMap());
-}
-
-
-/* option: Alternate Keyboard Mode */
-
-LOCALVAR blnr WantAltKeysMode;
-LOCALVAR ui3r olv_WantAltKeysMode;
-
-LOCALPROC ResetAltKeysMode(void)
-{
-	WantAltKeysMode = falseblnr;
-	olv_WantAltKeysMode = 0;
-}
-
-LOCALFUNC tMyErr TryAsAltKeysModeNot(void)
-{
-	return FlagTryAsOptionNot("-akm",
-		&WantAltKeysMode, &olv_WantAltKeysMode);
-}
-
-LOCALFUNC tMyErr ChooseAltKeysMode(void)
-{
-	return kMyErr_noErr;
-}
-
-LOCALPROC WrtOptAltKeysMode(void)
-{
-	WrtOptFlagOption("-akm", WantAltKeysMode);
-}
+/*
+	The "-ekt" emulated control toggle mapping and the "-akm"
+	alternate keyboard mode both depended on the Control Mode
+	overlay, so they are gone with it. "-ekt" chose which emulated
+	key the overlay's Control-K toggled, the only way to reach the
+	emulated Control key while the host one entered the overlay;
+	host Control now reaches it directly. "-akm" drew its state
+	into the overlay and existed for host keyboards missing keys a
+	Mac has, which a Mac host does not lack.
+*/
 
 
 /*
@@ -2725,106 +2585,14 @@ LOCALPROC WrtOptGrabKeysFS(void)
 }
 
 
-/* option: Enable Control Interrupt */
-
-LOCALVAR blnr WantEnblCtrlInt;
-LOCALVAR ui3r olv_EnblCtrlInt;
-
-LOCALPROC ResetEnblCtrlInt(void)
-{
-	WantEnblCtrlInt = nanblnr;
-	olv_EnblCtrlInt = 0;
-}
-
-LOCALFUNC tMyErr TryAsEnblCtrlIntNot(void)
-{
-	return BooleanTryAsOptionNot("-eci",
-		&WantEnblCtrlInt, &olv_EnblCtrlInt);
-}
-
-#define dfo_EnblCtrlInt() trueblnr
-
-LOCALFUNC tMyErr ChooseEnblCtrlInt(void)
-{
-	if (nanblnr == WantEnblCtrlInt) {
-		WantEnblCtrlInt = dfo_EnblCtrlInt();
-	}
-
-	return kMyErr_noErr;
-}
-
-LOCALPROC WrtOptEnblCtrlInt(void)
-{
-	WrtOptBooleanOption("-eci", WantEnblCtrlInt, dfo_EnblCtrlInt());
-}
-
-
-/* option: Enable Control Reset */
-
-LOCALVAR blnr WantEnblCtrlRst;
-LOCALVAR ui3r olv_EnblCtrlRst;
-
-LOCALPROC ResetEnblCtrlRst(void)
-{
-	WantEnblCtrlRst = nanblnr;
-	olv_EnblCtrlRst = 0;
-}
-
-LOCALFUNC tMyErr TryAsEnblCtrlRstNot(void)
-{
-	return BooleanTryAsOptionNot("-ecr",
-		&WantEnblCtrlRst, &olv_EnblCtrlRst);
-}
-
-#define dfo_EnblCtrlRst() trueblnr
-
-LOCALFUNC tMyErr ChooseEnblCtrlRst(void)
-{
-	if (nanblnr == WantEnblCtrlRst) {
-		WantEnblCtrlRst = dfo_EnblCtrlRst();
-	}
-
-	return kMyErr_noErr;
-}
-
-LOCALPROC WrtOptEnblCtrlRst(void)
-{
-	WrtOptBooleanOption("-ecr", WantEnblCtrlRst, dfo_EnblCtrlRst());
-}
-
-
-/* option: Enable Control K (emulated control toggle) */
-
-LOCALVAR blnr WantEnblCtrlKtg;
-LOCALVAR ui3r olv_EnblCtrlKtg;
-
-LOCALPROC ResetEnblCtrlKtg(void)
-{
-	WantEnblCtrlKtg = nanblnr;
-	olv_EnblCtrlKtg = 0;
-}
-
-LOCALFUNC tMyErr TryAsEnblCtrlKtgNot(void)
-{
-	return BooleanTryAsOptionNot("-eck",
-		&WantEnblCtrlKtg, &olv_EnblCtrlKtg);
-}
-
-#define dfo_EnblCtrlKtg() trueblnr
-
-LOCALFUNC tMyErr ChooseEnblCtrlKtg(void)
-{
-	if (nanblnr == WantEnblCtrlKtg) {
-		WantEnblCtrlKtg = dfo_EnblCtrlKtg();
-	}
-
-	return kMyErr_noErr;
-}
-
-LOCALPROC WrtOptEnblCtrlKtg(void)
-{
-	WrtOptBooleanOption("-eck", WantEnblCtrlKtg, dfo_EnblCtrlKtg());
-}
+/*
+	The "-iid", "-eci", "-ecr" and "-eck" options enabled Control
+	Mode commands: inserting the Nth disk image, interrupt, reset
+	and the emulated Control key toggle. The overlay is gone. Reset
+	and interrupt are in the Machine menu, disk images are opened
+	from the File menu, and Control reaches the emulated computer
+	directly.
+*/
 
 
 /*
@@ -3511,10 +3279,6 @@ LOCALFUNC tMyErr ChooseTotMemSize(void)
 		TotMemSize += (1 << dbglog_buflnsz);
 	}
 
-
-	/* CntrlDisplayBuff */
-	TotMemSize += vMacScreenNumBytes;
-
 	/* screencomparebuff */
 	TotMemSize += vMacScreenNumBytes;
 
@@ -3570,11 +3334,8 @@ LOCALPROC SPResetCommandLineParameters(void)
 	ResetSonySupportDC42();
 	ResetNonDiskProtect();
 	ResetSaveDialogEnable();
-	ResetInsertIthDisk();
 	ResetCmndOptSwap();
 	ResetKeyMapOption();
-	ResetEKTMapOption();
-	ResetAltKeysMode();
 	ResetLocalTalk();
 	ResetLTOOption();
 	ResetInitSpeedOption();
@@ -3602,9 +3363,6 @@ LOCALPROC SPResetCommandLineParameters(void)
 	ResetWantMinExtn();
 	ResetMouseMotionOption();
 	ResetGrabKeysFS();
-	ResetEnblCtrlInt();
-	ResetEnblCtrlRst();
-	ResetEnblCtrlKtg();
 	ResetAltHappyMacOption();
 	ResetRomSizeOption();
 	ResetCheckRomCheckSum();
@@ -3638,11 +3396,8 @@ LOCALFUNC tMyErr TryAsSPOptionNot(void)
 	if (kMyErrNoMatch == (err = TryAsSonySupportDC42Not()))
 	if (kMyErrNoMatch == (err = TryAsNonDiskProtectNot()))
 	if (kMyErrNoMatch == (err = TryAsSaveDialogEnable()))
-	if (kMyErrNoMatch == (err = TryAsInsertIthDisk()))
 	if (kMyErrNoMatch == (err = TryAsCmndOptSwapNot()))
 	if (kMyErrNoMatch == (err = TryAsKeyMapOptionNot()))
-	if (kMyErrNoMatch == (err = TryAsEKTMapOptionNot()))
-	if (kMyErrNoMatch == (err = TryAsAltKeysModeNot()))
 	if (kMyErrNoMatch == (err = TryAsLocalTalkNot()))
 	if (kMyErrNoMatch == (err = TryAsLTOOptionNot()))
 	if (kMyErrNoMatch == (err = TryAsInitSpeedOptionNot()))
@@ -3670,9 +3425,6 @@ LOCALFUNC tMyErr TryAsSPOptionNot(void)
 	if (kMyErrNoMatch == (err = TryAsWantMinExtnNot()))
 	if (kMyErrNoMatch == (err = TryAsMouseMotionOptionNot()))
 	if (kMyErrNoMatch == (err = TryAsGrabKeysFSNot()))
-	if (kMyErrNoMatch == (err = TryAsEnblCtrlIntNot()))
-	if (kMyErrNoMatch == (err = TryAsEnblCtrlRstNot()))
-	if (kMyErrNoMatch == (err = TryAsEnblCtrlKtgNot()))
 	if (kMyErrNoMatch == (err = TryAsAltHappyMacOptionNot()))
 	if (kMyErrNoMatch == (err = TryAsRomSizeOptionNot()))
 	if (kMyErrNoMatch == (err = TryAsCheckRomCheckSumNot()))
@@ -3710,11 +3462,8 @@ LOCALFUNC tMyErr AutoChooseSPSettings(void)
 	if (kMyErr_noErr == (err = ChooseSonySupportDC42()))
 	if (kMyErr_noErr == (err = ChooseNonDiskProtect()))
 	if (kMyErr_noErr == (err = ChooseSaveDialogEnable()))
-	if (kMyErr_noErr == (err = ChooseInsertIthDisk()))
 	if (kMyErr_noErr == (err = ChooseCmndOptSwap()))
 	if (kMyErr_noErr == (err = ChooseKeyMap()))
-	if (kMyErr_noErr == (err = ChooseEKTMap()))
-	if (kMyErr_noErr == (err = ChooseAltKeysMode()))
 	if (kMyErr_noErr == (err = ChooseLocalTalk()))
 	if (kMyErr_noErr == (err = ChooseLTOOption()))
 	if (kMyErr_noErr == (err = ChooseInitSpeed()))
@@ -3743,9 +3492,6 @@ LOCALFUNC tMyErr AutoChooseSPSettings(void)
 	if (kMyErr_noErr == (err = ChooseWantMinExtn()))
 	if (kMyErr_noErr == (err = ChooseMouseMotion()))
 	if (kMyErr_noErr == (err = ChooseGrabKeysFS()))
-	if (kMyErr_noErr == (err = ChooseEnblCtrlInt()))
-	if (kMyErr_noErr == (err = ChooseEnblCtrlRst()))
-	if (kMyErr_noErr == (err = ChooseEnblCtrlKtg()))
 	if (kMyErr_noErr == (err = ChooseAltHappyMac()))
 	if (kMyErr_noErr == (err = ChooseRomSize()))
 	if (kMyErr_noErr == (err = ChooseCheckRomCheckSum()))
@@ -3788,11 +3534,8 @@ LOCALPROC WrtOptSPSettings(void)
 	WrtOptSonySupportDC42();
 	WrtOptNonDiskProtect();
 	WrtOptSaveDialogEnable();
-	WrtOptInsertIthDisk();
 	WrtOptCmndOptSwap();
 	WrtOptKeyMap();
-	WrtOptEKTMap();
-	WrtOptAltKeysMode();
 	WrtOptLocalTalk();
 	WrtOptLTOOption();
 	WrtOptInitSpeedOption();
@@ -3820,9 +3563,6 @@ LOCALPROC WrtOptSPSettings(void)
 	WrtOptMinExtn();
 	WrtOptMouseMotion();
 	WrtOptGrabKeysFS();
-	WrtOptEnblCtrlInt();
-	WrtOptEnblCtrlRst();
-	WrtOptEnblCtrlKtg();
 	WrtOptAltHappyMac();
 	WrtOptRomSize();
 	WrtOptCheckRomCheckSum();

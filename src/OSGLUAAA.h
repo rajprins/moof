@@ -66,7 +66,7 @@ EXPORTOSGLUPROC MyMoveBytes(anyp srcPtr, anyp destPtr, si5b byteCount);
 EXPORTVAR(ui3p, ROM)
 
 /*
-	error codes returned by Mini vMac extensions
+	error codes returned by the emulator extensions
 	(passed back to the emulated 68k code).
 */
 
@@ -450,7 +450,7 @@ EXPORTOSGLUPROC MyEvtQOutDone(void);
 	#define MKC_F15 MKC_Pause
 */
 
-/* not Apple key codes, only for Mini vMac */
+/* not Apple key codes, only for the emulator */
 
 #define MKC_CM 0x80
 #define MKC_real_CapsLock 0x81

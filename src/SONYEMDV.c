@@ -19,12 +19,12 @@
 
 	The Sony hardware is not actually emulated. Instead the
 	ROM is patched to replace the Sony disk driver with
-	code that calls Mini vMac extensions implemented in
+	code that calls the emulator extensions implemented in
 	the file.
 
 	Information neeeded to better support the Disk Copy 4.2
 	format was found in libdc42.c of the Lisa Emulator Project
-	by Ray A. Arachelian, and adapted to Mini vMac
+	by Ray A. Arachelian, and adapted to this emulator
 	by Jesus A. Alvarez.
 */
 
@@ -321,7 +321,7 @@ LOCALFUNC tMacErr vSonyNextPendingInsert(tDrive *Drive_No)
 #if NonDiskProtect
 				if (L < checkheadersize) {
 					WarnMsgUnsupportedDisk();
-					result = -1;
+					result = mnvm_miscErr;
 				} else
 #endif
 				if (mnvm_noErr == (result = vSonyTransfer(falseblnr,
@@ -439,26 +439,46 @@ LOCALFUNC tMacErr vSonyNextPendingInsert(tDrive *Drive_No)
 						}
 					}
 
-					// Handle file with HFS partitions. Based on the Basilisk II find_hfs_partition implementation.
+					/*
+						Image with an Apple partition map: mount the
+						first Apple_HFS partition. Based on Basilisk II
+						find_hfs_partition. The partition's start and
+						length come from the image, so check them
+						against the image size before trusting them.
+					*/
 					if (! gotFormat) {
-						int i;
-						for (i = 0; i < checkheaderblocks; i++) {
-							ui4r drSigWord = do_get_mem_word(&Temp[512 * i]);
-							if (drSigWord == 0x504D) { // HFS partition map magic number.
-								ui3p map = &Temp[512 * i];
-								if (strcmp((char *)(map + 48), "Apple_HFS") == 0) {
-									DataOffset = ((map[8] << 24) | (map[9] << 16) | (map[10] << 8) | map[11]) << 9;
-									DataSize = 512 * ((map[12] << 24) | (map[13] << 16) | (map[14] << 8) | map[15]);
+						ui5r j;
+						ui5r ImageBlocks = L >> 9;
+
+						for (j = 0; j < checkheaderblocks; j++) {
+							ui3p map = &Temp[512 * j];
+
+							if (0x504D != do_get_mem_word(map)) {
+								/* not a 'PM' partition map entry */
+								continue;
+							}
+							/* pmPartType, including terminating 0 */
+							if (0 == memcmp(map + 48, "Apple_HFS", 10)) {
+								ui5r pyStart = do_get_mem_long(map + 8);
+								ui5r blkCnt = do_get_mem_long(map + 12);
+
+								if ((pyStart < ImageBlocks)
+									&& (blkCnt != 0)
+									&& (blkCnt <= ImageBlocks - pyStart))
+								{
+									/* can't overflow, both < L */
+									DataOffset = pyStart << 9;
+									DataSize = blkCnt << 9;
 									gotFormat = trueblnr;
-									break;
 								}
+								break;
 							}
 						}
 					}
 
 					if (! gotFormat) {
 						WarnMsgUnsupportedDisk();
-						result = -1;
+						result = mnvm_miscErr;
 					}
 #endif
 				}
@@ -616,19 +636,74 @@ LOCALFUNC tMacErr Drive_EjectDelete(tDrive Drive_No)
 }
 #endif
 
-GLOBALPROC Sony_EjectAllDisks(void)
+/*
+	Eject requested by the host interface rather than by the guest.
+
+	The host must not close the image through vSonyEject on its own:
+	the mounted mask here would still claim the drive, so the guest's
+	next access would reach vSonyTransfer with a closed file, and an
+	image later inserted into the same slot would never be announced.
+	Going through here keeps both views in step and updates the
+	checksums, exactly as a guest eject does. The guest is not told,
+	so to it this looks like a disk pulled from the drive.
+*/
+GLOBALPROC Sony_EjectDriveFromHost(tDrive Drive_No)
+{
+	if ((Drive_No < NumDrives) && vSonyIsInserted(Drive_No)) {
+		if (vSonyIsMounted(Drive_No)) {
+			/*
+				The image offsets the checksums need are only
+				known once the drive has been mounted.
+			*/
+			vSonyMountedMask &= ~ ((ui5b)1 << Drive_No);
+#if Sony_WantChecksumsUpdated
+			Drive_UpdateChecksums(Drive_No);
+#endif
+		}
+		(void) vSonyEject(Drive_No);
+	}
+}
+
+/*
+	Whether the guest has been told about the disk in this drive.
+	Once it has, the emulated Mac holds the volume open and expects
+	to be the one that ejects it, so the host interface asks before
+	pulling it out from under the guest. An image that is inserted
+	but not yet announced can be removed without the guest noticing.
+*/
+GLOBALFUNC blnr Sony_IsDriveMountedByGuest(tDrive Drive_No)
+{
+	return (Drive_No < NumDrives) && vSonyIsMounted(Drive_No);
+}
+
+/*
+	Called when the emulated machine is reset, from the host's Machine
+	menu or by the RESET instruction the Finder executes on Restart.
+
+	This used to eject every image, closing the host files, so a reset
+	Mac came back to the blinking question mark disk. Real hardware
+	does not do that: the reset line leaves disks in their drives, and
+	the Finder ejects floppies itself, through the driver, before it
+	restarts. So only the guest's view is dropped here. The images stay
+	inserted, become pending again, and are announced to the new disk
+	driver once it registers its mount callback after the reboot,
+	exactly as images present at launch are.
+
+	Checksums are only updated for drives that were mounted, because
+	the image offsets they need are not known before that.
+*/
+GLOBALPROC Sony_UnmountAllDisks(void)
 {
 	tDrive i;
 
-	vSonyMountedMask = 0;
 	for (i = 0; i < NumDrives; ++i) {
-		if (vSonyIsInserted(i)) {
+		if (vSonyIsMounted(i)) {
 #if Sony_WantChecksumsUpdated
 			Drive_UpdateChecksums(i);
 #endif
-			(void) vSonyEject(i);
 		}
 	}
+	vSonyMountedMask = 0;
 }
 
 GLOBALPROC Sony_Reset(void)
@@ -639,7 +714,7 @@ GLOBALPROC Sony_Reset(void)
 }
 
 /*
-	Mini vMac extension for low level access to disk operations.
+	Emulator extension for low level access to disk operations.
 */
 
 #define kCmndDiskNDrives 1
@@ -852,7 +927,7 @@ GLOBALPROC ExtnDisk_Access(CPTR p)
 
 
 /*
-	Mini vMac extension that implements most of the logic
+	Emulator extension that implements most of the logic
 	of the replacement disk driver patched into the emulated ROM.
 	(sony_driver in ROMEMDEV.c)
 
