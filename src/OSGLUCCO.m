@@ -812,21 +812,6 @@ GLOBALOSGLUFUNC blnr ExtraTimeNotOver(void)
 	EmuThread_IsCurrent guard around every lock operation.
 */
 
-LOCALPROC MySleepSeconds(double seconds)
-{
-	struct timespec rqt;
-	struct timespec rmt;
-
-	if (seconds <= 0.0) {
-		return;
-	}
-
-	rqt.tv_sec = (time_t)seconds;
-	rqt.tv_nsec = (long)((seconds - (double)rqt.tv_sec) * 1000000000.0);
-
-	(void) nanosleep(&rqt, &rmt);
-}
-
 /*
 	What WaitForNextTick does instead of sleeping when reached on the
 	main thread, which only happens from WaitForRom during startup.
@@ -900,9 +885,7 @@ label_retry:
 		MyDrawChangesAndClear();
 
 		if (onEmuThread) {
-			EmuLock_Release();
-			MySleepSeconds(0.010);
-			EmuLock_Acquire();
+			EmuLock_SleepUnlocked(0.010);
 			releasedLock = trueblnr;
 		} else {
 			MyIdleOnMainThread(0.010);
@@ -915,9 +898,7 @@ label_retry:
 
 		if (inTimeout > 0.0) {
 			if (onEmuThread) {
-				EmuLock_Release();
-				MySleepSeconds(inTimeout);
-				EmuLock_Acquire();
+				EmuLock_SleepUnlocked(inTimeout);
 				releasedLock = trueblnr;
 			} else {
 				MyIdleOnMainThread(inTimeout);

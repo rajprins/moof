@@ -26,7 +26,6 @@
 #import <AppKit/AppKit.h>
 
 #include <pthread.h>
-#include <sched.h>
 #include <time.h>
 
 /*
@@ -102,24 +101,33 @@ bool EmuLock_TryAcquire(void)
 	return 0 == pthread_mutex_trylock(&gLock);
 }
 
+void EmuLock_SleepUnlocked(double seconds)
+{
+	struct timespec rqt;
+
+	if (seconds < 0.0) {
+		seconds = 0.0;
+	}
+	rqt.tv_sec = (time_t) seconds;
+	rqt.tv_nsec = (long) ((seconds - (double) rqt.tv_sec) * 1e9);
+
+	pthread_mutex_unlock(&gLock);
+	(void) nanosleep(&rqt, NULL);
+	pthread_mutex_lock(&gLock);
+}
+
+/*
+	sched_yield alone is not enough here: the main thread may not be
+	runnable yet, and a bare yield can be answered by immediately
+	rescheduling this thread. A very short sleep reliably lets the
+	main thread take the lock, at a cost that only applies in "all
+	out" mode where there is no pacing sleep anyway.
+*/
+#define kEmuLockYieldSeconds 0.0001 /* 0.1 ms */
+
 void EmuLock_Yield(void)
 {
-	{
-		pthread_mutex_unlock(&gLock);
-		/*
-			sched_yield alone is not enough here: the main thread
-			may not be runnable yet, and a bare yield can be
-			answered by immediately rescheduling this thread. A
-			very short sleep reliably lets the main thread take
-			the lock, at a cost that only applies in "all out"
-			mode where there is no pacing sleep anyway.
-		*/
-		struct timespec rqt;
-		rqt.tv_sec = 0;
-		rqt.tv_nsec = 100000; /* 0.1 ms */
-		(void) nanosleep(&rqt, NULL);
-		pthread_mutex_lock(&gLock);
-	}
+	EmuLock_SleepUnlocked(kEmuLockYieldSeconds);
 }
 
 static void * EmuThread_Main(void *arg)
