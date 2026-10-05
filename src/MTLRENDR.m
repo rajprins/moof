@@ -115,6 +115,14 @@ static int gGuestWidth = 0;
 static int gGuestHeight = 0;
 
 /*
+	What the latest Upload left for Draw: which texture, which part
+	of it, and whether there is anything new at all.
+*/
+static bool gUploadPending = false;
+static bool gUploadIsColor = false;
+static tSrcRect gUploadSrc;
+
+/*
 	This target is compiled without ARC, since the backend still
 	uses explicit retain and release and manual autorelease pools.
 	Ownership is therefore spelled out by hand here. The retains and
@@ -247,6 +255,7 @@ bool MTLRenderer_Init(NSView *view, int guestWidth, int guestHeight)
 
 void MTLRenderer_UnInit(void)
 {
+	gUploadPending = false;
 	[gTexColor release];
 	gTexColor = nil;
 	[gTexMono release];
@@ -280,7 +289,7 @@ void MTLRenderer_Resize(double ptWidth, double ptHeight,
 		ptHeight * backingScale);
 }
 
-void MTLRenderer_Present(const void *pixels, bool isColor,
+void MTLRenderer_Upload(const void *pixels, bool isColor,
 	int srcX, int srcY, int srcW, int srcH)
 {
 	if ((nil == gLayer) || (nil == gQueue) || (NULL == pixels)) {
@@ -289,14 +298,6 @@ void MTLRenderer_Present(const void *pixels, bool isColor,
 	if ((srcW <= 0) || (srcH <= 0)) {
 		return;
 	}
-
-	/*
-		Metal hands back autoreleased drawables, command buffers and
-		encoders. This is reached from the emulator's per tick draw
-		path, which does not always sit inside a pool of its own, so
-		one is established here rather than relying on the caller.
-	*/
-	@autoreleasepool {
 
 	id<MTLTexture> tex = isColor ? gTexColor : gTexMono;
 	NSUInteger bytesPerPixel = isColor ? 4 : 1;
@@ -308,6 +309,9 @@ void MTLRenderer_Present(const void *pixels, bool isColor,
 		alternative means unioning dirty rectangles whenever the
 		display skips a produced frame, and that bookkeeping is a
 		reliable source of corruption that cannot be reproduced.
+
+		replaceRegion on a shared storage texture is a synchronous
+		CPU copy, so once it returns the caller's buffer is free.
 	*/
 	[tex replaceRegion: MTLRegionMake2D(0, 0,
 			(NSUInteger)gGuestWidth, (NSUInteger)gGuestHeight)
@@ -315,6 +319,35 @@ void MTLRenderer_Present(const void *pixels, bool isColor,
 		withBytes: pixels
 		bytesPerRow: (NSUInteger)gGuestWidth * bytesPerPixel];
 
+	gUploadIsColor = isColor;
+	gUploadSrc.originX = (float)srcX / (float)gGuestWidth;
+	gUploadSrc.originY = (float)srcY / (float)gGuestHeight;
+	gUploadSrc.sizeW = (float)srcW / (float)gGuestWidth;
+	gUploadSrc.sizeH = (float)srcH / (float)gGuestHeight;
+	gUploadPending = true;
+}
+
+void MTLRenderer_Draw(void)
+{
+	if ((nil == gLayer) || (nil == gQueue) || ! gUploadPending) {
+		return;
+	}
+
+	gUploadPending = false;
+
+	/*
+		Metal hands back autoreleased drawables, command buffers and
+		encoders. The caller does not always sit inside a pool of its
+		own, so one is established here rather than relying on it.
+	*/
+	@autoreleasepool {
+
+	id<MTLTexture> tex = gUploadIsColor ? gTexColor : gTexMono;
+
+	/*
+		nextDrawable can block until the compositor frees one, which
+		is why this runs outside the caller's lock.
+	*/
 	id<CAMetalDrawable> drawable = [gLayer nextDrawable];
 	if (nil == drawable) {
 		return;
@@ -328,18 +361,14 @@ void MTLRenderer_Present(const void *pixels, bool isColor,
 	rp.colorAttachments[0].clearColor =
 		MTLClearColorMake(0.0, 0.0, 0.0, 1.0);
 
-	tSrcRect src;
-	src.originX = (float)srcX / (float)gGuestWidth;
-	src.originY = (float)srcY / (float)gGuestHeight;
-	src.sizeW = (float)srcW / (float)gGuestWidth;
-	src.sizeH = (float)srcH / (float)gGuestHeight;
-
 	id<MTLCommandBuffer> cb = [gQueue commandBuffer];
 	id<MTLRenderCommandEncoder> enc =
 		[cb renderCommandEncoderWithDescriptor: rp];
 
-	[enc setRenderPipelineState: isColor ? gPipeColor : gPipeMono];
-	[enc setVertexBytes: &src length: sizeof(src) atIndex: 0];
+	[enc setRenderPipelineState:
+		gUploadIsColor ? gPipeColor : gPipeMono];
+	[enc setVertexBytes: &gUploadSrc length: sizeof(gUploadSrc)
+		atIndex: 0];
 	[enc setFragmentTexture: tex atIndex: 0];
 	[enc setFragmentSamplerState: gSampler atIndex: 0];
 	[enc drawPrimitives: MTLPrimitiveTypeTriangleStrip

@@ -2055,8 +2055,8 @@ LOCALPROC MyDrawWithMetal(ui4r top, ui4r left, ui4r bottom, ui4r right)
 		Conversion happens on whichever thread is emulating, but
 		presentation must not: it reads the layer, whose geometry
 		belongs to AppKit. So the converted frame is recorded here
-		and MyPresentPendingFrame draws it from the display link on
-		the main thread. The emulator lock covers ScalingBuff, so
+		and MyUploadPendingFrame copies it out from the display link
+		on the main thread. The emulator lock covers ScalingBuff, so
 		the two never overlap.
 	*/
 	FrameSrcX = srcX;
@@ -2075,18 +2075,40 @@ label_exit:
 }
 
 /*
-	Presents whatever the emulator last converted. Main thread only,
-	with the emulator lock held by the caller.
+	Copies whatever the emulator last converted into the renderer's
+	texture. Main thread only, with the emulator lock held by the
+	caller: FrameIsReady and ScalingBuff belong to the lock. Returns
+	whether there is now something for MyDrawUploadedFrame to draw.
+
+	Only the copy happens under the lock. Taking a drawable can wait
+	on the compositor, and encoding and committing are GPU side
+	work; none of that needs emulator state, so the caller releases
+	the lock first and then calls MyDrawUploadedFrame. The emulator
+	thread can therefore run its next tick while the frame is being
+	drawn, instead of waiting behind the GPU.
 */
-LOCALPROC MyPresentPendingFrame(void)
+LOCALFUNC blnr MyUploadPendingFrame(void)
 {
 	if (FrameIsReady) {
 		FrameIsReady = falseblnr;
 
-		MTLRenderer_Present(ScalingBuff,
+		MTLRenderer_Upload(ScalingBuff,
 			FrameIsColor ? true : false,
 			FrameSrcX, FrameSrcY, FrameSrcW, FrameSrcH);
+
+		return trueblnr;
 	}
+
+	return falseblnr;
+}
+
+/*
+	Draws the frame MyUploadPendingFrame last copied. Main thread
+	only, without the emulator lock.
+*/
+LOCALPROC MyDrawUploadedFrame(void)
+{
+	MTLRenderer_Draw();
 }
 
 
@@ -5055,7 +5077,9 @@ LOCALPROC MyIdleOnMainThread(double seconds)
 	NSEvent *event;
 
 	CheckForSavedTasks();
-	MyPresentPendingFrame();
+	if (MyUploadPendingFrame()) {
+		MyDrawUploadedFrame();
+	}
 
 	event = [NSApp nextEventMatchingMask: NSEventMaskAny
 		untilDate: [NSDate dateWithTimeIntervalSinceNow: seconds]
@@ -5303,14 +5327,25 @@ LOCALFUNC blnr setupWorkingDirectory(void)
 
 - (void)frameTick:(id)sender
 {
+	blnr haveFrame;
+
 	(void) sender;
 
 	EmuLock_Acquire();
 
 	CheckForSavedTasks();
-	MyPresentPendingFrame();
+	haveFrame = MyUploadPendingFrame();
 
 	EmuLock_Release();
+
+	/*
+		GPU work after the lock is let go, so the emulator thread is
+		not held up by it. The texture is this thread's own once the
+		upload has returned.
+	*/
+	if (haveFrame) {
+		MyDrawUploadedFrame();
+	}
 }
 
 @end
