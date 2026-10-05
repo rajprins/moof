@@ -32,9 +32,6 @@ LOCALPROC WriteLocalTalkCNFUIOSG(void)
 		WriteDestFileLn("#include <net/bpf.h>");
 	}
 	if ((gbk_lto_udp == gbo_lto) || CurUseAllFiles) {
-#if 0
-		WriteDestFileLn("#include <ifaddrs.h>");
-#endif
 		WriteCompCondBool("use_SO_REUSEPORT", trueblnr);
 	}
 }
