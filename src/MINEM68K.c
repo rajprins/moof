@@ -856,7 +856,7 @@ LOCALPROC m68k_go_MaxCycles(void)
 
 FORWARDFUNC ui5r my_reg_call get_byte_ext(CPTR addr);
 
-LOCALFUNC ui5r my_reg_call get_byte(CPTR addr)
+LOCALINLINEFUNC ui5r my_reg_call get_byte(CPTR addr)
 {
 	ui3p m = (addr & V_regs.MATCrdB.usemask) + V_regs.MATCrdB.usebase;
 
@@ -869,7 +869,7 @@ LOCALFUNC ui5r my_reg_call get_byte(CPTR addr)
 
 FORWARDPROC my_reg_call put_byte_ext(CPTR addr, ui5r b);
 
-LOCALPROC my_reg_call put_byte(CPTR addr, ui5r b)
+LOCALINLINEPROC my_reg_call put_byte(CPTR addr, ui5r b)
 {
 	ui3p m = (addr & V_regs.MATCwrB.usemask) + V_regs.MATCwrB.usebase;
 	if ((addr & V_regs.MATCwrB.cmpmask) == V_regs.MATCwrB.cmpvalu) {
@@ -881,7 +881,7 @@ LOCALPROC my_reg_call put_byte(CPTR addr, ui5r b)
 
 FORWARDFUNC ui5r my_reg_call get_word_ext(CPTR addr);
 
-LOCALFUNC ui5r my_reg_call get_word(CPTR addr)
+LOCALINLINEFUNC ui5r my_reg_call get_word(CPTR addr)
 {
 	ui3p m = (addr & V_regs.MATCrdW.usemask) + V_regs.MATCrdW.usebase;
 	if ((addr & V_regs.MATCrdW.cmpmask) == V_regs.MATCrdW.cmpvalu) {
@@ -893,7 +893,7 @@ LOCALFUNC ui5r my_reg_call get_word(CPTR addr)
 
 FORWARDPROC my_reg_call put_word_ext(CPTR addr, ui5r w);
 
-LOCALPROC my_reg_call put_word(CPTR addr, ui5r w)
+LOCALINLINEPROC my_reg_call put_word(CPTR addr, ui5r w)
 {
 	ui3p m = (addr & V_regs.MATCwrW.usemask) + V_regs.MATCwrW.usebase;
 	if ((addr & V_regs.MATCwrW.cmpmask) == V_regs.MATCwrW.cmpvalu) {
@@ -905,7 +905,7 @@ LOCALPROC my_reg_call put_word(CPTR addr, ui5r w)
 
 FORWARDFUNC ui5r my_reg_call get_long_misaligned_ext(CPTR addr);
 
-LOCALFUNC ui5r my_reg_call get_long_misaligned(CPTR addr)
+LOCALINLINEFUNC ui5r my_reg_call get_long_misaligned(CPTR addr)
 {
 	CPTR addr2 = addr + 2;
 	ui3p m = (addr & V_regs.MATCrdW.usemask) + V_regs.MATCrdW.usebase;
@@ -929,7 +929,7 @@ FORWARDFUNC ui5r my_reg_call get_long_ext(CPTR addr);
 #endif
 
 #if FasterAlignedL
-LOCALFUNC ui5r my_reg_call get_long(CPTR addr)
+LOCALINLINEFUNC ui5r my_reg_call get_long(CPTR addr)
 {
 	if (0 == (addr & 0x03)) {
 		ui3p m = (addr & V_regs.MATCrdL.usemask)
@@ -949,7 +949,7 @@ LOCALFUNC ui5r my_reg_call get_long(CPTR addr)
 
 FORWARDPROC my_reg_call put_long_misaligned_ext(CPTR addr, ui5r l);
 
-LOCALPROC my_reg_call put_long_misaligned(CPTR addr, ui5r l)
+LOCALINLINEPROC my_reg_call put_long_misaligned(CPTR addr, ui5r l)
 {
 	CPTR addr2 = addr + 2;
 	ui3p m = (addr & V_regs.MATCwrW.usemask) + V_regs.MATCwrW.usebase;
@@ -969,7 +969,7 @@ FORWARDPROC my_reg_call put_long_ext(CPTR addr, ui5r l);
 #endif
 
 #if FasterAlignedL
-LOCALPROC my_reg_call put_long(CPTR addr, ui5r l)
+LOCALINLINEPROC my_reg_call put_long(CPTR addr, ui5r l)
 {
 	if (0 == (addr & 0x03)) {
 		ui3p m = (addr & V_regs.MATCwrL.usemask)
@@ -1097,12 +1097,12 @@ LOCALFUNC ui5b my_reg_call get_disp_ea(ui5b base)
 	}
 }
 
-LOCALFUNC ui5r my_reg_call DecodeAddr_Indirect(ui3rr ArgDat)
+LOCALINLINEFUNC ui5r my_reg_call DecodeAddr_Indirect(ui3rr ArgDat)
 {
 	return V_regs.regs[ArgDat];
 }
 
-LOCALFUNC ui5r my_reg_call DecodeAddr_APosIncB(ui3rr ArgDat)
+LOCALINLINEFUNC ui5r my_reg_call DecodeAddr_APosIncB(ui3rr ArgDat)
 {
 	ui5r *p = &V_regs.regs[ArgDat];
 	ui5r a = *p;
@@ -1112,7 +1112,7 @@ LOCALFUNC ui5r my_reg_call DecodeAddr_APosIncB(ui3rr ArgDat)
 	return a;
 }
 
-LOCALFUNC ui5r my_reg_call DecodeAddr_APosIncW(ui3rr ArgDat)
+LOCALINLINEFUNC ui5r my_reg_call DecodeAddr_APosIncW(ui3rr ArgDat)
 {
 	ui5r *p = &V_regs.regs[ArgDat];
 	ui5r a = *p;
@@ -1122,7 +1122,7 @@ LOCALFUNC ui5r my_reg_call DecodeAddr_APosIncW(ui3rr ArgDat)
 	return a;
 }
 
-LOCALFUNC ui5r my_reg_call DecodeAddr_APosIncL(ui3rr ArgDat)
+LOCALINLINEFUNC ui5r my_reg_call DecodeAddr_APosIncL(ui3rr ArgDat)
 {
 	ui5r *p = &V_regs.regs[ArgDat];
 	ui5r a = *p;
@@ -1132,7 +1132,7 @@ LOCALFUNC ui5r my_reg_call DecodeAddr_APosIncL(ui3rr ArgDat)
 	return a;
 }
 
-LOCALFUNC ui5r my_reg_call DecodeAddr_APreDecB(ui3rr ArgDat)
+LOCALINLINEFUNC ui5r my_reg_call DecodeAddr_APreDecB(ui3rr ArgDat)
 {
 	ui5r *p = &V_regs.regs[ArgDat];
 	ui5r a = *p - 1;
@@ -1142,7 +1142,7 @@ LOCALFUNC ui5r my_reg_call DecodeAddr_APreDecB(ui3rr ArgDat)
 	return a;
 }
 
-LOCALFUNC ui5r my_reg_call DecodeAddr_APreDecW(ui3rr ArgDat)
+LOCALINLINEFUNC ui5r my_reg_call DecodeAddr_APreDecW(ui3rr ArgDat)
 {
 	ui5r *p = &V_regs.regs[ArgDat];
 	ui5r a = *p - 2;
@@ -1152,7 +1152,7 @@ LOCALFUNC ui5r my_reg_call DecodeAddr_APreDecW(ui3rr ArgDat)
 	return a;
 }
 
-LOCALFUNC ui5r my_reg_call DecodeAddr_APreDecL(ui3rr ArgDat)
+LOCALINLINEFUNC ui5r my_reg_call DecodeAddr_APreDecL(ui3rr ArgDat)
 {
 	ui5r *p = &V_regs.regs[ArgDat];
 	ui5r a = *p - 4;
@@ -1162,29 +1162,29 @@ LOCALFUNC ui5r my_reg_call DecodeAddr_APreDecL(ui3rr ArgDat)
 	return a;
 }
 
-LOCALFUNC ui5r my_reg_call DecodeAddr_ADisp(ui3rr ArgDat)
+LOCALINLINEFUNC ui5r my_reg_call DecodeAddr_ADisp(ui3rr ArgDat)
 {
 	return V_regs.regs[ArgDat] + nextiSWord();
 }
 
-LOCALFUNC ui5r my_reg_call DecodeAddr_AIndex(ui3rr ArgDat)
+LOCALINLINEFUNC ui5r my_reg_call DecodeAddr_AIndex(ui3rr ArgDat)
 {
 	return get_disp_ea(V_regs.regs[ArgDat]);
 }
 
-LOCALFUNC ui5r my_reg_call DecodeAddr_AbsW(ui3rr ArgDat)
+LOCALINLINEFUNC ui5r my_reg_call DecodeAddr_AbsW(ui3rr ArgDat)
 {
 	UnusedParam(ArgDat);
 	return nextiSWord();
 }
 
-LOCALFUNC ui5r my_reg_call DecodeAddr_AbsL(ui3rr ArgDat)
+LOCALINLINEFUNC ui5r my_reg_call DecodeAddr_AbsL(ui3rr ArgDat)
 {
 	UnusedParam(ArgDat);
 	return nextilong();
 }
 
-LOCALFUNC ui5r my_reg_call DecodeAddr_PCDisp(ui3rr ArgDat)
+LOCALINLINEFUNC ui5r my_reg_call DecodeAddr_PCDisp(ui3rr ArgDat)
 {
 	CPTR pc = m68k_getpc();
 
@@ -1192,7 +1192,7 @@ LOCALFUNC ui5r my_reg_call DecodeAddr_PCDisp(ui3rr ArgDat)
 	return pc + nextiSWord();
 }
 
-LOCALFUNC ui5r my_reg_call DecodeAddr_PCIndex(ui3rr ArgDat)
+LOCALINLINEFUNC ui5r my_reg_call DecodeAddr_PCIndex(ui3rr ArgDat)
 {
 	UnusedParam(ArgDat);
 	return get_disp_ea(m68k_getpc());
