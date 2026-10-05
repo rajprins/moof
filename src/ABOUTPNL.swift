@@ -30,12 +30,6 @@ import AppKit
 
 struct AboutView: View {
 
-	var appName: String {
-		Bundle.main.object(
-			forInfoDictionaryKey: "CFBundleName") as? String
-			?? "Moof"
-	}
-
 	private var version: String {
 		Bundle.main.object(
 			forInfoDictionaryKey: "CFBundleShortVersionString")
@@ -50,7 +44,7 @@ struct AboutView: View {
 					.frame(width: 96, height: 96)
 			}
 
-			Text(appName)
+			Text(Bundle.main.appName)
 				.font(.title2)
 				.bold()
 
@@ -91,7 +85,7 @@ final class AboutPanel: NSObject {
 			styleMask: [.titled, .closable],
 			backing: .buffered,
 			defer: false)
-		w.title = "About \(AboutView().appName)"
+		w.title = "About \(Bundle.main.appName)"
 		w.contentView = NSHostingView(rootView: AboutView())
 		w.isReleasedWhenClosed = false
 		w.center()
