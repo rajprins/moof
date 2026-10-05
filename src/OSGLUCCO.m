@@ -476,6 +476,7 @@ LOCALFUNC blnr MacRomanFileNameToNSString(tPbuf i,
 						case '|':
 						case ':':
 							x = '-';
+							break;
 						default:
 							break;
 					}
@@ -545,11 +546,11 @@ LOCALFUNC tMacErr NSStringToRomanPbuf(NSString *string, tPbuf *r)
 			NSUInteger i;
 
 			for (i = L; i > 0; --i) {
-				ui3b v = *p0++;
-				if (10 == v) {
-					v = 13;
+				ui3b c = *p0++;
+				if (10 == c) {
+					c = 13;
 				}
-				*p1++ = v;
+				*p1++ = c;
 			}
 
 			v = PbufNewFromPtr(p, (ui5b) L, r);

@@ -491,7 +491,7 @@ LOCALINLINEPROC add192(
 	ui6b *z2Ptr)
 {
 	ui6b z0, z1, z2;
-	si3r carry0, carry1;
+	ui6b carry0, carry1;
 
 	z2 = a2 + b2;
 	carry1 = ( z2 < a2 );
@@ -547,7 +547,7 @@ LOCALINLINEPROC
  )
 {
 	ui6b z0, z1, z2;
-	si3r borrow0, borrow1;
+	ui6b borrow0, borrow1;
 
 	z2 = a2 - b2;
 	borrow1 = ( a2 < b2 );
@@ -1359,7 +1359,7 @@ LOCALFUNC floatx80
 {
 	si3r roundingMode;
 	flag roundNearestEven, increment, isTiny;
-	si6r roundIncrement, roundMask, roundBits;
+	ui6b roundIncrement, roundMask, roundBits;
 
 	roundingMode = float_rounding_mode;
 	roundNearestEven = ( roundingMode == float_round_nearest_even );
