@@ -21,9 +21,12 @@
 	Swift file talks to this type and never touches the C surface
 	directly, which is what keeps C types out of the view layer.
 
-	Reads go straight through to the emulator, which is cheap: the
-	accessors in EMUCTLAP take the emulator lock, and at ordinary
-	speeds that lock is free for most of every tick.
+	Reads go through the emulator lock. The accessors in EMUCTLAP
+	each take it, and at high speeds the emulator thread holds it for
+	most of every tick, so a single accessor can wait up to 1/60 s.
+	refresh therefore makes one pass over all of them, is throttled
+	so that a burst of callers costs one pass, and caches what does
+	not change between passes.
 
 	Writes are requests. The emulator polls the flags they set, so a
 	change here takes effect on a following tick rather than at once.
@@ -32,7 +35,7 @@
 */
 
 import Foundation
-import SwiftUI
+import Combine
 
 /// Emulated speed, as offered in the interface.
 enum EmulatorSpeed: Int, CaseIterable, Identifiable {
@@ -149,10 +152,39 @@ final class EmulatorBridge: ObservableObject {
 	*/
 	private var isRefreshing = false
 
+	/*
+		When the last pass over the emulator finished, and the shortest
+		interval between passes. Menu validation and the Settings poll
+		both ask for a refresh, and the menu asks once per item, so
+		without this a twelve item menu would cost twelve passes.
+	*/
+	private var lastRefresh: TimeInterval = -.infinity
+	private let refreshInterval: TimeInterval = 0.05
+
+	/*
+		Image names by drive index, kept from one pass to the next.
+		MNVM_CopyDriveName builds an autorelease pool and a path
+		component string on every call, so a drive is only asked
+		again while its name is unknown, after it has been seen
+		empty, or when the caller forces a refresh. A menu opening
+		forces one, so a swap the poll happened to miss is corrected
+		the next time the user looks.
+	*/
+	private var driveNames: [Int: String] = [:]
+
 	// MARK: reading back
 
 	/// Pulls current emulator state into the published properties.
-	func refresh() {
+	///
+	/// Passes made less than `refreshInterval` after the previous
+	/// one are skipped unless `force` is set. A forced pass also
+	/// rereads every image name, so a caller about to act on the
+	/// state, or showing it after a long gap, gets the truth.
+	func refresh(force: Bool = false) {
+		let now = ProcessInfo.processInfo.systemUptime
+		guard force || now - lastRefresh >= refreshInterval else { return }
+		lastRefresh = now
+
 		isRefreshing = true
 		defer { isRefreshing = false }
 
@@ -170,10 +202,20 @@ final class EmulatorBridge: ObservableObject {
 		update(\.runInBackground, MNVM_GetRunInBackground())
 		update(\.autoSlow, MNVM_GetAutoSlow())
 
-		update(\.insertedDrives, (0 ..< driveCount).compactMap {
-			MNVM_GetDriveInserted(Int32($0))
-				? DiskDrive(index: $0, imageName: imageName(drive: $0))
-				: nil
+		if force {
+			driveNames.removeAll()
+		}
+
+		update(\.insertedDrives, (0 ..< driveCount).compactMap { drive in
+			guard MNVM_GetDriveInserted(Int32(drive)) else {
+				driveNames[drive] = nil
+				return nil
+			}
+
+			let name = driveNames[drive] ?? imageName(drive: drive)
+			driveNames[drive] = name
+
+			return DiskDrive(index: drive, imageName: name)
 		})
 	}
 
@@ -199,13 +241,14 @@ final class EmulatorBridge: ObservableObject {
 		return String(cString: buffer)
 	}
 
-	var anyDriveInserted: Bool { MNVM_GetAnyDriveInserted() }
-
 	// MARK: actions
 
 	func reset() { MNVM_PostReset() }
 	func interrupt() { MNVM_PostInterrupt() }
-	func insertDisk() { MNVM_PostInsertDisk() }
+	func insertDisk() {
+		MNVM_PostInsertDisk()
+		driveNames.removeAll()
+	}
 	func requestQuit() { MNVM_PostQuit() }
 
 	/// Whether the guest has mounted the disk, and so expects to be
@@ -223,6 +266,7 @@ final class EmulatorBridge: ObservableObject {
 
 	func eject(drive: Int) {
 		MNVM_PostEjectDrive(Int32(drive))
-		refresh()
+		driveNames[drive] = nil
+		refresh(force: true)
 	}
 }
