@@ -101,6 +101,13 @@ bool EmuLock_TryAcquire(void)
 	return 0 == pthread_mutex_trylock(&gLock);
 }
 
+void EmuLock_RunUnlocked(void (^block)(void))
+{
+	pthread_mutex_unlock(&gLock);
+	block();
+	pthread_mutex_lock(&gLock);
+}
+
 void EmuLock_SleepUnlocked(double seconds)
 {
 	struct timespec rqt;
@@ -111,9 +118,9 @@ void EmuLock_SleepUnlocked(double seconds)
 	rqt.tv_sec = (time_t) seconds;
 	rqt.tv_nsec = (long) ((seconds - (double) rqt.tv_sec) * 1e9);
 
-	pthread_mutex_unlock(&gLock);
-	(void) nanosleep(&rqt, NULL);
-	pthread_mutex_lock(&gLock);
+	EmuLock_RunUnlocked(^{
+		(void) nanosleep(&rqt, NULL);
+	});
 }
 
 /*
