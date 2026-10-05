@@ -115,6 +115,15 @@ extern bool EmuLock_TryAcquire(void);
 extern void EmuLock_SleepUnlocked(double seconds);
 
 /*
+	Releases the lock, runs the block, and takes the lock again. For
+	the emulator thread only, under the same single-holding rule as
+	EmuLock_SleepUnlocked. For waits that are not sleeps: a
+	dispatch_sync to the main thread would deadlock with the lock
+	held, since the main thread may be blocked on that very lock.
+*/
+extern void EmuLock_RunUnlocked(void (^block)(void));
+
+/*
 	Called by the emulator thread around the point where it would
 	otherwise hold the lock continuously. Releases and immediately
 	reacquires, giving the main thread a chance to run. Needed
