@@ -25,31 +25,48 @@ is in the host. The name is for Clarus the Dogcow.
 
 Each build of Moof emulates one fixed Macintosh model: the model,
 memory size, screen size and colour depth are chosen at build time,
-not at run time. The build scripts in the top level of the repository
-each produce one such configuration:
+not at run time. `build.sh` in the top level of the repository
+produces one such configuration, chosen by a preset name:
 
-| Script | Model | Screen | Memory |
+```sh
+./build.sh [preset] [--clean] [--debug] [-- extra setuptool args]
+```
+
+| Preset | Model | Screen | Memory |
 |---|---|---|---|
-| `build.sh` | Macintosh II | 800×600, 256 colours | 8 MB |
-| `build-macbookpro.sh` | Macintosh II | 864×558, 256 colours | 8 MB |
-| `build-macplus.sh` | Macintosh Plus | 512×384 mono | 1 MB |
-| `build-mac-classic.sh` | Macintosh Classic | 512×384 mono | 2 MB |
-| `build-mac512k.sh` | Macintosh 512Ke | 512×384 mono | 512 KB |
+| `ii` (default) | Macintosh II | 800×600, 256 colours | 8 MB |
+| `mbp` | Macintosh II | 864×558, 256 colours, starts fullscreen | 8 MB |
+| `plus` | Macintosh Plus | 512×384 mono | 1 MB |
+| `classic` | Macintosh Classic | 512×384 mono, Dutch keyboard | 2 MB |
+| `512k` | Macintosh 512Ke | 512×384 mono | 512 KB |
 
-Run one of them from the top of the repository:
+Run it from the top of the repository, for example:
 
 ```sh
 ./build.sh
+./build.sh plus
 ```
 
 The script compiles the setup tool, generates an Xcode project from
 the chosen options, and runs `xcodebuild`. The result is `moof.app`
 in the repository root. Everything the script generates is listed in
-`.gitignore`; a fresh run removes and regenerates all of it, so edit
-the script rather than the generated project.
+`.gitignore`; a run removes and regenerates the project and `cfg/`,
+so edit the script rather than the generated project. The setup tool
+is only recompiled when something in `setup/` changed, and
+`xcodebuild`'s derived data in `build/` is kept between runs so a
+rebuild only recompiles what changed. `--clean` removes `build/` and
+the setup tool as well for a build from scratch.
 
-To make your own configuration, copy a script and change the
-arguments to the setup tool. The ones you are most likely to touch:
+Anything after `--` is appended to the setup tool invocation and
+overrides the preset's options, so a configuration can be varied
+without editing the script. For example, to enable LocalTalk, carried
+over UDP multicast between Moof instances:
+
+```sh
+./build.sh -- -lt -lto udp
+```
+
+Options you are most likely to use this way:
 
 | Option | Meaning |
 |---|---|
@@ -63,30 +80,27 @@ arguments to the setup tool. The ones you are most likely to touch:
 | `-lt -lto udp` | Enable LocalTalk, carried over UDP multicast between Moof instances |
 | `-n <name>` | Name of the generated project and application |
 
-The complete list is in `setup/SPBLDOPT.i`.
+The complete list is in `setup/SPBLDOPT.i`. To add a preset of your
+own, add a line to the `case` block in `build.sh`.
 
 ### The Kanji (Japanese Macintosh Plus) variant
 
 The [Japanese Macintosh Plus 256K ROM](https://web.archive.org/web/20250518175439/https://www.journaldulapin.com/2025/05/17/the-lost-japanese-rom-of-the-macintosh-plus-which-isnt-lost-anymore/),
-which has KanjiTalk fonts built in, works with `-m Kanji`. For
-example, with LocalTalk enabled:
+which has KanjiTalk fonts built in, works with `-m Kanji`. Start from
+the `plus` preset, since the Macintosh II presets ask for a colour
+depth the Kanji model does not support. For example, with LocalTalk
+enabled:
 
 ```sh
-./setuptool -n "moof-kanji" -e xcd -t mcar \
-  -m Kanji -lt -lto udp -sgn 0 > makefilegen
+./build.sh plus -- -m Kanji -lt -lto udp -sgn 0
 ```
 
 ### A build with symbols
 
-Release builds are stripped. For debugging, build the generated
-project directly with stripping and optimisation off:
-
-```sh
-xcodebuild -project moof.xcodeproj -configuration Release \
-  STRIP_INSTALLED_PRODUCT=NO DEPLOYMENT_POSTPROCESSING=NO \
-  GCC_OPTIMIZATION_LEVEL=0 DEBUG_INFORMATION_FORMAT=dwarf \
-  GCC_GENERATE_DEBUGGING_SYMBOLS=YES
-```
+Release builds are stripped. `./build.sh --debug` builds the same
+project without stripping and with DWARF debug information, keeping
+the optimisation level, so `lldb` can show function names and
+backtraces for the result.
 
 ## Running
 
