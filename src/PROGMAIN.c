@@ -103,6 +103,14 @@ LOCALPROC EmulatedHardwareZap(void)
 #endif
 	Sony_Reset();
 	Extn_Reset();
+	/*
+		The zaps above write the interrupt request wires to 0
+		directly, without the change notification that normally
+		recomputes the CPU's interrupt level from them. After a
+		reset taken while a device was asserting its request the
+		level would otherwise stay raised with nothing driving it.
+	*/
+	VIAorSCCinterruptChngNtfy();
 	m68k_reset();
 }
 

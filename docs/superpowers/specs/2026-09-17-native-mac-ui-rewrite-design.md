@@ -636,6 +636,13 @@ regression from the rewrite, and is a candidate for a second pull
 request to the upstream project alongside the LocalTalk one. The commit
 is `a7e6acb`.
 
+A code review of the core afterwards found a second gap in the same
+path: the VIA and SCC zaps write their interrupt request wires to 0
+directly, so the CPU's derived interrupt level was never recomputed
+and stayed at whatever a device had asserted when Reset was clicked.
+`EmulatedHardwareZap` now calls `VIAorSCCinterruptChngNtfy` after
+the zaps.
+
 Two earlier guesses were wrong and are recorded so they are not tried
 again: clearing the wires to 0 selects a different wrong bank, and
 calling `Vid_Reset` on reset changes nothing.
