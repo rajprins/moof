@@ -629,12 +629,17 @@ LOCALVAR si4b ScreenChangedLeft;
 LOCALVAR si4b ScreenChangedBottom;
 LOCALVAR si4b ScreenChangedRight;
 
+/*
+	The empty rectangle: Top above Bottom and Left beyond Right, so
+	that the first change Screen_OutputFrame records simply becomes
+	the rectangle. A consumer must test Bottom > Top before using it.
+*/
 LOCALPROC ScreenClearChanges(void)
 {
-	ScreenChangedTop = 0;
-	ScreenChangedBottom = vMacScreenHeight;
-	ScreenChangedLeft = 0;
-	ScreenChangedRight = vMacScreenWidth;
+	ScreenChangedTop = vMacScreenHeight;
+	ScreenChangedBottom = 0;
+	ScreenChangedLeft = vMacScreenWidth;
+	ScreenChangedRight = 0;
 }
 
 LOCALPROC ScreenChangedAll(void)

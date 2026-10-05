@@ -93,6 +93,15 @@ extern void EmuLock_Acquire(void);
 extern void EmuLock_Release(void);
 
 /*
+	Takes the lock only if it is free, returning whether it did. A
+	true result must be paired with EmuLock_Release like any other
+	acquisition. For work that can as well happen on the next frame
+	as on this one, so that the main thread need not wait behind a
+	tick in progress.
+*/
+extern bool EmuLock_TryAcquire(void);
+
+/*
 	Called by the emulator thread around the point where it would
 	otherwise hold the lock continuously. Releases and immediately
 	reacquires, giving the main thread a chance to run. Needed
