@@ -2118,8 +2118,18 @@ LOCALPROC MyDrawUploadedFrame(void)
 
 LOCALVAR ui5b TrueEmulatedTime = 0;
 
-LOCALVAR NSTimeInterval LatestTime;
-LOCALVAR NSTimeInterval NextTickChangeTime;
+/*
+	Two clocks. Pacing uses the monotonic clock, in seconds since an
+	arbitrary origin: it is a single kernel call with no Foundation
+	object behind it, and it is read on every subtick, so that is
+	the one that has to be cheap. It also never jumps when the user
+	or NTP adjusts the clock, which the wall clock did. The guest's
+	own clock needs the wall clock, which CheckDateTime reads once
+	per tick into LatestWallTime.
+*/
+LOCALVAR double LatestTime;
+LOCALVAR double NextTickChangeTime;
+LOCALVAR NSTimeInterval LatestWallTime;
 
 #define MyTickDuration (1.0 / 60.14742)
 
@@ -2127,11 +2137,17 @@ LOCALVAR ui5b NewMacDateInSeconds;
 
 LOCALVAR blnr EmulationWasInterrupted = falseblnr;
 
+LOCALFUNC double MyMonotonicSeconds(void)
+{
+	return (double)clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)
+		* (1.0 / 1000000000.0);
+}
+
 LOCALPROC UpdateTrueEmulatedTime(void)
 {
-	NSTimeInterval TimeDiff;
+	double TimeDiff;
 
-	LatestTime = [NSDate timeIntervalSinceReferenceDate];
+	LatestTime = MyMonotonicSeconds();
 	TimeDiff = LatestTime - NextTickChangeTime;
 
 	if (TimeDiff >= 0.0) {
@@ -2156,7 +2172,12 @@ LOCALPROC UpdateTrueEmulatedTime(void)
 			} while (TimeDiff >= 0.0);
 		}
 	} else if (TimeDiff < (-16 * MyTickDuration)) {
-		/* clock set back, reset */
+		/*
+			Far ahead of schedule. The monotonic clock does not go
+			back, so this can only follow MySound_SecondNotify0
+			pushing NextTickChangeTime forward many times; treat it
+			as the old "clock set back" case and resynchronise.
+		*/
 #if dbglog_TimeStuff
 		dbglog_writeln("clock set back");
 #endif
@@ -2476,8 +2497,12 @@ LOCALPROC MyCheckTimeZone(void)
 #if AutoTimeZone
 	ui5b OldMacDelta = CurMacDelta;
 #endif
+	/* NSTimeZone localTimeZone is autoreleased. */
+	NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
 
 	MySetTimeZoneDat();
+
+	[pool release];
 
 	if ((OldDateDelta != MyDateDelta)
 #if AutoTimeZone
@@ -2491,9 +2516,17 @@ LOCALPROC MyCheckTimeZone(void)
 	}
 }
 
+/*
+	Once per tick, not per subtick: this is the one wall clock read
+	in the loop. CFAbsoluteTimeGetCurrent counts from the same 2001
+	reference date as NSDate and creates no object.
+*/
 LOCALFUNC blnr CheckDateTime(void)
 {
-	ui5b NewMinute = ((ui5b)LatestTime) / 60;
+	ui5b NewMinute;
+
+	LatestWallTime = CFAbsoluteTimeGetCurrent();
+	NewMinute = ((ui5b)LatestWallTime) / 60;
 
 	if ((! MyPRAMActive) && EmuThread_IsCurrent()) {
 		MyPRAM_Restore();
@@ -2505,7 +2538,7 @@ LOCALFUNC blnr CheckDateTime(void)
 		MyCheckTimeZone();
 	}
 
-	NewMacDateInSeconds = ((ui5b)LatestTime) + MyDateDelta;
+	NewMacDateInSeconds = ((ui5b)LatestWallTime) + MyDateDelta;
 	if (CurMacDateInSeconds != NewMacDateInSeconds) {
 		CurMacDateInSeconds = NewMacDateInSeconds;
 		MyPRAM_SaveIfChanged();
@@ -2517,7 +2550,7 @@ LOCALFUNC blnr CheckDateTime(void)
 
 LOCALPROC StartUpTimeAdjust(void)
 {
-	LatestTime = [NSDate timeIntervalSinceReferenceDate];
+	LatestTime = MyMonotonicSeconds();
 	NextTickChangeTime = LatestTime;
 }
 
@@ -2531,10 +2564,11 @@ LOCALFUNC blnr InitLocationDat(void)
 	*/
 
 	MySetTimeZoneDat();
-	LatestTime = [NSDate timeIntervalSinceReferenceDate];
-	MyTimeZoneCheckMinute = ((ui5b)LatestTime) / 60;
-	NewMacDateInSeconds = ((ui5b)LatestTime) + MyDateDelta;
+	LatestWallTime = CFAbsoluteTimeGetCurrent();
+	MyTimeZoneCheckMinute = ((ui5b)LatestWallTime) / 60;
+	NewMacDateInSeconds = ((ui5b)LatestWallTime) + MyDateDelta;
 	CurMacDateInSeconds = NewMacDateInSeconds;
+	StartUpTimeAdjust();
 
 	/*
 		NSTimeZone caches the system zone, so the cache is dropped
@@ -4706,6 +4740,11 @@ LOCALPROC MakeNewDiskAtDefault(ui5b L)
 }
 #endif
 
+LOCALVAR blnr CursorCheckWanted = trueblnr;
+LOCALVAR unsigned int CursorCheckCounter = 0;
+
+LOCALPROC MyCheckCursorVisible(void);
+
 LOCALPROC CheckForSavedTasks(void)
 {
 	if (MyEvtQNeedRecover) {
@@ -4736,6 +4775,7 @@ LOCALPROC CheckForSavedTasks(void)
 		} else {
 			LeaveBackground();
 		}
+		CursorCheckWanted = trueblnr;
 	}
 
 	if (EmulationWasInterrupted) {
@@ -4874,14 +4914,31 @@ LOCALPROC CheckForSavedTasks(void)
 		} else {
 			MyShowCursor();
 		}
+		CursorCheckWanted = trueblnr;
 	}
 
-#if 1
 	/*
 		Check if actual cursor visibility is what it should be.
 		If move mouse to dock then cursor is made visible, but then
 		if move directly to our window, cursor is not hidden again.
+
+		CGCursorIsVisible is a window server round trip, so it is
+		not asked every frame: only when the hidden state or the key
+		window state has just changed, and otherwise every fifteenth
+		frame, which is still a quarter of a second at most for the
+		Dock case above to be put right.
 	*/
+	if (CursorCheckWanted || (0 == (++CursorCheckCounter % 15))) {
+		CursorCheckWanted = falseblnr;
+		MyCheckCursorVisible();
+	}
+}
+
+/*
+	The CGCursorIsVisible part of CheckForSavedTasks, above.
+*/
+LOCALPROC MyCheckCursorVisible(void)
+{
 	/*
 		CGCursorIsVisible has been deprecated since 10.9 with no
 		replacement, and is kept deliberately. Nothing else reports
@@ -4919,7 +4976,6 @@ LOCALPROC CheckForSavedTasks(void)
 		}
 	}
 #pragma clang diagnostic pop
-#endif
 }
 
 /* --- main program flow --- */
@@ -5191,6 +5247,7 @@ LOCALPROC MySleepSeconds(double seconds)
 */
 LOCALPROC MyIdleOnMainThread(double seconds)
 {
+	NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
 	NSEvent *event;
 
 	CheckForSavedTasks();
@@ -5205,13 +5262,20 @@ LOCALPROC MyIdleOnMainThread(double seconds)
 	if (nil != event) {
 		[NSApp sendEvent: event];
 	}
+
+	[pool release];
 }
 
+/*
+	No autorelease pool of its own: the only Objective-C objects
+	made on this path are inside MyIdleOnMainThread and
+	MyCheckTimeZone, which each have one. Making and draining a pool
+	every tick was a measurable share of an idle tick.
+*/
 GLOBALOSGLUPROC WaitForNextTick(void)
 {
 	blnr onEmuThread = EmuThread_IsCurrent();
 	blnr releasedLock = falseblnr;
-	NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
 
 label_retry:
 
@@ -5299,7 +5363,7 @@ label_retry:
 #endif
 
 label_exit:
-	[pool release];
+	;
 }
 
 LOCALFUNC blnr setupWorkingDirectory(void)
