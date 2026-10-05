@@ -5091,12 +5091,42 @@ LOCALFUNC blnr ProcessOneSystemEvent(NSEvent *event)
 		still falls through to the guest, so Control chords the host
 		does not claim are not swallowed.
 	*/
-	if (NSEventTypeKeyDown == [event type]) {
+	NSEventType type = [event type];
+
+	if (NSEventTypeKeyDown == type) {
 		if (0 != ([event modifierFlags] & NSEventModifierFlagControl)) {
 			if ([[self mainMenu] performKeyEquivalent: event]) {
 				return;
 			}
 		}
+	}
+
+	/*
+		Only events the emulator could want are offered to it, and
+		only those cost a trip through the emulator lock. Key events
+		have no window of their own worth checking, since the
+		emulator wants them whenever it is frontmost, and
+		ProcessOneSystemEvent sorts out the rest. Mouse events are
+		for the emulator only when they are in its window; a drag of
+		the title bar, a click in a Settings window or a menu
+		tracking event goes straight to AppKit.
+
+		Events with no window at all are left to AppKit as well.
+		The one case where the emulator used to see such an event
+		was a mouse up after a drag that began inside the window,
+		which it already lets through when it has no button down.
+	*/
+	switch (type) {
+		case NSEventTypeKeyDown:
+		case NSEventTypeKeyUp:
+		case NSEventTypeFlagsChanged:
+			break;
+		default:
+			if ([event window] != MyWindow) {
+				[super sendEvent: event];
+				return;
+			}
+			break;
 	}
 
 	EmuLock_Acquire();
@@ -5412,13 +5442,38 @@ LOCALFUNC blnr setupWorkingDirectory(void)
 
 @implementation MyClassFrameDriver
 
+/*
+	How many frames in a row the lock may be found busy before this
+	thread blocks for it. At ordinary speed the lock is free for most
+	of each tick, so this is rarely reached, but at "all out" speed
+	the emulator holds it almost continuously, and without a bound
+	the housekeeping in CheckForSavedTasks could go unrun.
+*/
+#define kFrameTickMaxSkips 8
+
+LOCALVAR int FrameTickSkips = 0;
+
 - (void)frameTick:(id)sender
 {
 	blnr haveFrame;
 
 	(void) sender;
 
-	EmuLock_Acquire();
+	/*
+		If the emulator thread is in the middle of a tick, waiting
+		for it would stall the main thread for the rest of that
+		tick. Nothing done here is urgent: the frame can be drawn on
+		the next refresh, and the housekeeping checks flags that
+		stay set. So the frame is skipped when the lock is busy, up
+		to a limit.
+	*/
+	if (! EmuLock_TryAcquire()) {
+		if (++FrameTickSkips < kFrameTickMaxSkips) {
+			return;
+		}
+		EmuLock_Acquire();
+	}
+	FrameTickSkips = 0;
 
 	CheckForSavedTasks();
 	haveFrame = MyUploadPendingFrame();

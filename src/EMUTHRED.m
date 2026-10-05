@@ -96,6 +96,12 @@ void EmuLock_Release(void)
 	pthread_mutex_unlock(&gLock);
 }
 
+bool EmuLock_TryAcquire(void)
+{
+	(void) pthread_once(&gLockOnce, EmuLock_Init);
+	return 0 == pthread_mutex_trylock(&gLock);
+}
+
 void EmuLock_Yield(void)
 {
 	{
