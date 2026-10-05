@@ -2668,8 +2668,8 @@ LOCALPROC MySound_Start0(void)
 {
 	/*
 		Reset variables. The render callback is not running here:
-		MySound_Start calls this before AudioOutputUnitStart, and
-		MySound_Stop has already called AudioOutputUnitStop.
+		MySound_Start stops the unit, if a fade out still had it
+		running, before calling this, and starts it only after.
 	*/
 	atomic_store_explicit(&ThePlayOffset, 0, memory_order_relaxed);
 	atomic_store_explicit(&TheFillOffset, 0, memory_order_relaxed);
@@ -2898,13 +2898,19 @@ LOCALPROC SoundRampTo(trSoundTemp *last_val, trSoundTemp dst_val,
 /*
 	Of the fields shared with the render thread, wantplaying is the
 	emulator's request to start or stop and lastv is the callback's
-	report of where the output level has got to; MySound_Stop clears
-	the first and then waits on the second to reach the centre, so
-	the stop ramps rather than clicks. Release on each store and
-	acquire on each cross thread load make that handshake an ordered
-	one. HaveStartedPlaying is reset by MySound_Start while the unit
-	is stopped and otherwise belongs to the callback, but it is atomic
-	too so that no field here is shared without being.
+	report of where the output level has got to. When wantplaying is
+	cleared the callback ramps the output to the centre value, so the
+	stop fades rather than clicks, and once it gets there it sets
+	RampDone. Release on each store and acquire on each cross thread
+	load make that handshake an ordered one. HaveStartedPlaying is
+	reset by MySound_Start while the unit is stopped and otherwise
+	belongs to the callback, but it is atomic too so that no field
+	here is shared without being.
+
+	UnitRunning is main thread and emulator thread state, under the
+	emulator lock: whether AudioOutputUnitStart has been called
+	without a matching AudioOutputUnitStop yet. StopQueued says a
+	block that will do that stop is waiting on the main queue.
 */
 struct MySoundR {
 	tpSoundSamp fTheSoundBuffer;
@@ -2915,8 +2921,11 @@ struct MySoundR {
 	_Atomic trSoundTemp lastv;
 
 	blnr enabled;
+	blnr UnitRunning;
+	blnr StopQueued;
 	_Atomic blnr wantplaying;
 	_Atomic blnr HaveStartedPlaying;
+	_Atomic blnr RampDone;
 
 	AudioUnit outputAudioUnit;
 };
@@ -2964,6 +2973,16 @@ label_retry:
 #endif
 
 		SoundRampTo(&v1, kCenterTempSound, &dst, &len);
+
+		if (kCenterTempSound == v1) {
+			/*
+				The fade out is complete. Release pairs with the
+				acquire in MySound_StopUnitIfRampDone, which may
+				now stop the unit without a click.
+			*/
+			atomic_store_explicit(&datp->RampDone, trueblnr,
+				memory_order_release);
+		}
 
 		ToPlayLen = 0;
 	} else if (! atomic_load_explicit(&datp->HaveStartedPlaying,
@@ -3057,7 +3076,6 @@ label_retry:
 		goto label_retry;
 	}
 
-	/* Release pairs with the acquire in MySound_Stop. */
 	atomic_store_explicit(&datp->lastv, v1, memory_order_release);
 }
 
@@ -3094,54 +3112,15 @@ LOCALPROC ZapAudioVars(void)
 	memset(&cur_audio, 0, sizeof(MySoundR));
 }
 
-LOCALPROC MySound_Stop(void)
+/*
+	Stops the audio unit now. Emulator lock held.
+*/
+LOCALPROC MySound_StopUnit(void)
 {
-#if dbglog_SoundStuff
-	dbglog_writeln("enter MySound_Stop");
-#endif
-
-	if (atomic_load_explicit(&cur_audio.wantplaying,
-		memory_order_relaxed))
-	{
+	if (cur_audio.UnitRunning) {
 		OSStatus result;
-		ui4r retry_limit = 50; /* half of a second */
 
-		atomic_store_explicit(&cur_audio.wantplaying, falseblnr,
-			memory_order_release);
-
-label_retry:
-		if (kCenterTempSound == atomic_load_explicit(&cur_audio.lastv,
-			memory_order_acquire))
-		{
-#if dbglog_SoundStuff
-			dbglog_writeln("reached kCenterTempSound");
-#endif
-
-			/* done */
-		} else if (0 == --retry_limit) {
-#if dbglog_SoundStuff
-			dbglog_writeln("retry limit reached");
-#endif
-			/* done */
-		} else
-		{
-			/*
-				give time back, particularly important
-				if got here on a suspend event.
-			*/
-			struct timespec rqt;
-			struct timespec rmt;
-
-#if dbglog_SoundStuff
-			dbglog_writeln("busy, so sleep");
-#endif
-
-			rqt.tv_sec = 0;
-			rqt.tv_nsec = 10000000;
-			(void) nanosleep(&rqt, &rmt);
-
-			goto label_retry;
-		}
+		cur_audio.UnitRunning = falseblnr;
 
 		if (noErr != (result = AudioOutputUnitStop(
 			cur_audio.outputAudioUnit)))
@@ -3152,6 +3131,91 @@ label_retry:
 		}
 
 		(void) result; /* ignore any errors */
+	}
+}
+
+/*
+	Runs on the main queue some time after MySound_Stop. Stops the
+	unit once the render callback has faded the output to the
+	centre, or gives up waiting after about half a second, as the
+	old code did. Checks that a stop is still wanted, since a
+	MySound_Start may have come and gone in between.
+*/
+LOCALPROC MySound_StopUnitIfRampDone(void);
+
+LOCALPROC MySound_QueueStopCheck(void)
+{
+	cur_audio.StopQueued = trueblnr;
+	dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+			10 * NSEC_PER_MSEC),
+		dispatch_get_main_queue(), ^{
+			MySound_StopUnitIfRampDone();
+		});
+}
+
+LOCALVAR int MySoundStopRetries = 0;
+
+LOCALPROC MySound_StopUnitIfRampDone(void)
+{
+	EmuLock_Acquire();
+
+	cur_audio.StopQueued = falseblnr;
+
+	if (cur_audio.UnitRunning
+		&& ! atomic_load_explicit(&cur_audio.wantplaying,
+			memory_order_relaxed))
+	{
+		/* Acquire pairs with the release in my_audio_callback. */
+		if (atomic_load_explicit(&cur_audio.RampDone,
+			memory_order_acquire))
+		{
+#if dbglog_SoundStuff
+			dbglog_writeln("reached kCenterTempSound");
+#endif
+			MySound_StopUnit();
+		} else if (++MySoundStopRetries >= 50) {
+#if dbglog_SoundStuff
+			dbglog_writeln("retry limit reached");
+#endif
+			MySound_StopUnit();
+		} else {
+			MySound_QueueStopCheck();
+		}
+	}
+
+	EmuLock_Release();
+}
+
+/*
+	Asks for sound to stop and returns at once. The render callback
+	fades the output to the centre on its own, and the unit is
+	stopped later from the main queue. This used to sleep in 10 ms
+	steps, up to half a second, waiting for the fade, with the
+	emulator lock held throughout; a pause therefore froze the
+	interface for as long as the fade took.
+
+	At teardown there is no later: MySound_UnInit stops the unit
+	itself, and the queued block, if it ever runs, finds nothing to
+	do.
+*/
+LOCALPROC MySound_Stop(void)
+{
+#if dbglog_SoundStuff
+	dbglog_writeln("enter MySound_Stop");
+#endif
+
+	if (atomic_load_explicit(&cur_audio.wantplaying,
+		memory_order_relaxed))
+	{
+		atomic_store_explicit(&cur_audio.RampDone, falseblnr,
+			memory_order_relaxed);
+		atomic_store_explicit(&cur_audio.wantplaying, falseblnr,
+			memory_order_release);
+
+		MySoundStopRetries = 0;
+		if (! cur_audio.StopQueued) {
+			MySound_QueueStopCheck();
+		}
 	}
 
 #if dbglog_SoundStuff
@@ -3170,10 +3234,22 @@ LOCALPROC MySound_Start(void)
 		dbglog_writeln("enter MySound_Start");
 #endif
 
+		/*
+			A stop may still be fading out: MySound_Stop returns
+			before the unit is stopped. The ring is about to be
+			reset, which the callback must not be reading through,
+			so the unit is stopped here first and started afresh.
+			Any check still queued finds UnitRunning and
+			wantplaying both saying there is nothing to do.
+		*/
+		MySound_StopUnit();
+
 		MySound_Start0();
 		atomic_store_explicit(&cur_audio.lastv, kCenterTempSound,
 			memory_order_relaxed);
 		atomic_store_explicit(&cur_audio.HaveStartedPlaying, falseblnr,
+			memory_order_relaxed);
+		atomic_store_explicit(&cur_audio.RampDone, falseblnr,
 			memory_order_relaxed);
 		/* Release publishes the resets above to the render thread. */
 		atomic_store_explicit(&cur_audio.wantplaying, trueblnr,
@@ -3187,6 +3263,8 @@ LOCALPROC MySound_Start(void)
 #endif
 			atomic_store_explicit(&cur_audio.wantplaying, falseblnr,
 				memory_order_relaxed);
+		} else {
+			cur_audio.UnitRunning = trueblnr;
 		}
 
 #if dbglog_SoundStuff
@@ -3208,6 +3286,15 @@ LOCALPROC MySound_UnInit(void)
 		struct AURenderCallbackStruct callback;
 
 		cur_audio.enabled = falseblnr;
+
+		/*
+			MySound_Stop, called just before this, only asks; the
+			unit is still running until the fade completes. Nothing
+			will run the queued stop after main returns, so stop it
+			here, before the callback is removed and the unit
+			disposed of.
+		*/
+		MySound_StopUnit();
 
 		/* Remove the input callback */
 		callback.inputProc = 0;
