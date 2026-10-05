@@ -67,7 +67,7 @@ LOCALPROC MyPresentMacMsg(NSString *briefMsg0, NSString *longMsg0,
 
 	if (fatal) {
 		[alert addButtonWithTitle:
-			NSStringCreateFromSubstCStr(kStrCmdQuit)];
+			NSStringFromSubstCStr(kStrCmdQuit)];
 	}
 
 	(void) [alert runModal];
@@ -93,9 +93,9 @@ LOCALPROC CheckSavedMacMsg(blnr deferred)
 	if ((nullpr != SavedBriefMsg) && ! PresentingMacMsg) {
 		blnr fatal = SavedFatalMsg;
 		NSString *briefMsg0 =
-			NSStringCreateFromSubstCStr(SavedBriefMsg);
+			NSStringFromSubstCStr(SavedBriefMsg);
 		NSString *longMsg0 =
-			NSStringCreateFromSubstCStr(SavedLongMsg);
+			NSStringFromSubstCStr(SavedLongMsg);
 
 		/*
 			Claim the message now, under the lock, so that the

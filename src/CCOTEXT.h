@@ -28,128 +28,109 @@
 
 /* --- text translation --- */
 
-LOCALPROC UniCharStrFromSubstCStr(int *L, unichar *x, char *s)
+/*
+	The emulator's own strings are in its cell encoding, which
+	ClStrFromSubstCStr produces from a C string with substitutions.
+	The result is autoreleased, hence no "Create" in the name; every
+	caller runs inside a pool.
+*/
+LOCALFUNC NSString * NSStringFromSubstCStr(char *s)
 {
 	int i;
-	int L0;
+	int L;
 	ui3b ps[ClStrMaxLength];
+	unichar x[ClStrMaxLength];
 
-	ClStrFromSubstCStr(&L0, ps, s);
+	ClStrFromSubstCStr(&L, ps, s);
 
-	for (i = 0; i < L0; ++i) {
+	for (i = 0; i < L; ++i) {
 		x[i] = Cell2UnicodeMap[ps[i]];
 	}
 
-	*L = L0;
-}
-
-LOCALFUNC NSString * NSStringCreateFromSubstCStr(char *s)
-{
-	int L;
-	unichar x[ClStrMaxLength];
-
-	UniCharStrFromSubstCStr(&L, x, s);
-
-	return [NSString stringWithCharacters:x length:L];
+	return [NSString stringWithCharacters: x length: L];
 }
 
 #if IncludeSonyNameNew
-LOCALFUNC blnr MacRomanFileNameToNSString(tPbuf i,
-	NSString **r)
+/*
+	A Mac Roman file name from the guest, made safe for the host
+	file system: path separators and shell-ish punctuation become
+	dashes, as do control characters and a leading dot. Bytes with
+	the high bit set are left alone, since they are ordinary Mac
+	Roman letters.
+
+	The copy is handed to the NSData, which frees it on release;
+	the Pbuf itself is not consumed. The result is autoreleased.
+*/
+LOCALFUNC blnr MacRomanFileNameToNSString(tPbuf i, NSString **r)
 {
-	ui3p p;
-	void *Buffer = PbufDat[i];
 	ui5b L = PbufSize[i];
+	const ui3b *src = (const ui3b *) PbufDat[i];
+	ui3b *p = (ui3b *) malloc(L);
+	ui5b j;
+	NSData *d;
 
-	p = (ui3p)malloc(L /* + 1 */);
-	if (p != NULL) {
-		NSData *d;
-		ui3b *p0 = (ui3b *)Buffer;
-		ui3b *p1 = (ui3b *)p;
-
-		if (L > 0) {
-			ui5b j = L;
-
-			do {
-				ui3b x = *p0++;
-				if (x < 32) {
-					x = '-';
-				} else if (x >= 128) {
-				} else {
-					switch (x) {
-						case '/':
-						case '<':
-						case '>':
-						case '|':
-						case ':':
-							x = '-';
-							break;
-						default:
-							break;
-					}
-				}
-				*p1++ = x;
-			} while (--j > 0);
-
-			if ('.' == p[0]) {
-				p[0] = '-';
-			}
-		}
-
-		d = [[NSData alloc] initWithBytesNoCopy:p length:L];
-
-		*r = [[[NSString alloc]
-			initWithData:d encoding:NSMacOSRomanStringEncoding]
-			autorelease];
-
-		[d release];
-
-		return trueblnr;
+	if (NULL == p) {
+		return falseblnr;
 	}
 
-	return falseblnr;
+	for (j = 0; j < L; ++j) {
+		ui3b x = src[j];
+
+		if ((x < 32)
+			|| ('/' == x) || ('<' == x) || ('>' == x)
+			|| ('|' == x) || (':' == x))
+		{
+			x = '-';
+		}
+		p[j] = x;
+	}
+	if ((L > 0) && ('.' == p[0])) {
+		p[0] = '-';
+	}
+
+	d = [[NSData alloc] initWithBytesNoCopy: p length: L];
+	*r = [[[NSString alloc]
+		initWithData: d encoding: NSMacOSRomanStringEncoding]
+		autorelease];
+	[d release];
+
+	return trueblnr;
 }
 #endif
 
 #if IncludeSonyGetName || IncludeHostTextClipExchange
 /*
-	The NSData is autoreleased; both callers, vSonyGetName and
-	HTCEimport, have a pool in place.
+	The reverse direction: an NSString into a new Pbuf as Mac Roman
+	with Mac line ends. dataUsingEncoding returns an autoreleased
+	object, so the caller must have a pool in place; vSonyGetName
+	and HTCEimport both do.
+
+	PbufNewFromPtr takes ownership of the buffer and frees it if no
+	Pbuf slot is free, so nothing here needs cleaning up on failure.
 */
 LOCALFUNC tMacErr NSStringToRomanPbuf(NSString *string, tPbuf *r)
 {
-	tMacErr v = mnvm_miscErr;
 	NSData *d0 = [string dataUsingEncoding: NSMacOSRomanStringEncoding
 		allowLossyConversion: YES];
-	const void *s = [d0 bytes];
+	const ui3b *s = (const ui3b *) [d0 bytes];
 	NSUInteger L = [d0 length];
+	ui3b *p;
+	NSUInteger j;
 
-	if ((NULL == s) || (L > (NSUInteger)(ui5b) -1)) {
+	if ((NULL == s) || (L > (NSUInteger) (ui5b) -1)) {
 		/* a Pbuf's size is 32 bits */
-		v = mnvm_miscErr;
-	} else {
-		ui3p p = (ui3p)malloc(L);
-
-		if (NULL == p) {
-			v = mnvm_miscErr;
-		} else {
-			/* memcpy((char *)p, s, L); */
-			ui3b *p0 = (ui3b *)s;
-			ui3b *p1 = (ui3b *)p;
-			NSUInteger i;
-
-			for (i = L; i > 0; --i) {
-				ui3b c = *p0++;
-				if (10 == c) {
-					c = 13;
-				}
-				*p1++ = c;
-			}
-
-			v = PbufNewFromPtr(p, (ui5b) L, r);
-		}
+		return mnvm_miscErr;
 	}
 
-	return v;
+	p = (ui3b *) malloc(L);
+	if (NULL == p) {
+		return mnvm_miscErr;
+	}
+
+	for (j = 0; j < L; ++j) {
+		p[j] = (10 == s[j]) ? 13 : s[j];
+	}
+
+	return PbufNewFromPtr(p, (ui5b) L, r);
 }
 #endif

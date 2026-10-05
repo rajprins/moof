@@ -33,7 +33,7 @@ LOCALFUNC blnr FindNamedChildPath(NSString *parentPath,
 	char *ChildName, NSString **childPath)
 {
 	blnr v = falseblnr;
-	NSString *ss = NSStringCreateFromSubstCStr(ChildName);
+	NSString *ss = NSStringFromSubstCStr(ChildName);
 	if (nil != ss) {
 		NSString *r = [parentPath stringByAppendingPathComponent: ss];
 		if (nil != r) {
